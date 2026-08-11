@@ -24,6 +24,31 @@ class TinyRocketConfig extends Config(
   new freechips.rocketchip.rocket.With1TinyCore ++                // single tiny rocket-core
   new chipyard.config.AbstractConfig)
 
+// Enables the Debug Module's System Bus Access (SBA) registers, so memory
+// can be written directly over DMI without halting the hart or using the
+// abstract-command/program-buffer path. Off by default (rocket-chip
+// DebugModuleParams.hasBusMaster = false).
+class WithSBADebugModule extends Config((site, here, up) => {
+  case freechips.rocketchip.devices.debug.DebugModuleKey =>
+    up(freechips.rocketchip.devices.debug.DebugModuleKey).map(_.copy(hasBusMaster = true))
+})
+
+// Same as TinyRocketConfig, but exposes the Debug Module over DMI (a plain
+// parallel address/data/op request-response bus) instead of JTAG (a
+// bit-serial protocol requiring an external probe). Combined with
+// WithSBADebugModule, this lets a simple on-board sequencer (e.g. driven by
+// a button press, see basys3/BasysTop.v) write firmware directly into the
+// DTIM with no external hardware at all -- see chipyard.config.WithDMIDTM.
+class TinyRocketDMIConfig extends Config(
+  new testchipip.soc.WithNoScratchpads ++
+  new freechips.rocketchip.subsystem.WithIncoherentBusTopology ++
+  new freechips.rocketchip.subsystem.WithNBanks(0) ++
+  new freechips.rocketchip.subsystem.WithNoMemPort ++
+  new chipyard.config.WithDMIDTM ++
+  new WithSBADebugModule ++
+  new freechips.rocketchip.rocket.With1TinyCore ++
+  new chipyard.config.AbstractConfig)
+
 class QuadRocketConfig extends Config(
   new freechips.rocketchip.rocket.WithNHugeCores(4) ++    // quad-core (4 RocketTiles)
   new chipyard.config.AbstractConfig)
