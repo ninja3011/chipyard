@@ -5,9 +5,10 @@
 //
 // No external hardware needed at all: firmware is loaded via the Debug
 // Module's DMI interface, driven by DmiAutoloader.v -- a one-button
-// hardware sequencer that replays the exact compiled ninad/firmware.mem
-// bytes as a fixed sequence of DMI writes (see DmiAutoloader.v for the
-// full explanation and sourcing of every register bit position used).
+// hardware sequencer that replays one of 8 pre-compiled firmware images as
+// a fixed sequence of DMI writes (see DmiAutoloader.v for the full
+// explanation and sourcing of every register bit position used, and its
+// "Program index" comment for which SW1-SW3 value loads which program).
 // TinyRocketDMIConfig's only memory is the Rocket core's 16KB DTIM (TCM),
 // plain internal BRAM inferred from SyncReadMem in the generated RTL --
 // Vivado infers it automatically, no external memory IP needed either.
@@ -32,10 +33,21 @@ module BasysTop (
   input  wire BTNU,       // T18 -- up pushbutton, active-high when pressed: start firmware load
 
   input  wire SW0,        // V17 -- slide switch 0: must be ON to arm the loader (safety interlock)
+  // SW1-SW3 form a 3-bit program select, sampled once when BTNU is pressed:
+  //   000=Hello World  001=Mandelbrot   010=Calculator   011=Fibonacci
+  //   100=Primes       101=Bubble sort  110=Game of Life 111=Times table
+  // (see DmiAutoloader.v's "Program index" comment in the generated ROM
+  // section, and gen_dmi_rom_multi.py's PROGRAMS list, for the same mapping)
+  input  wire SW1,        // V16 -- program select bit 0 (LSB)
+  input  wire SW2,        // W16 -- program select bit 1
+  input  wire SW3,        // W17 -- program select bit 2 (MSB)
 
   output wire LED0,       // U16 -- lit while the loader is running
   output wire LED1,       // E19 -- lit once the loader has finished
   output wire LED2,       // U19 -- mirrors SW0, confirms the board sees "armed"
+  output wire LED3,       // V19 -- mirrors SW1
+  output wire LED4,       // W18 -- mirrors SW2
+  output wire LED5,       // U15 -- mirrors SW3
 
   output wire RSTX,       // A18 -- Basys3 "RsTx": FPGA TX -> host RX
   input  wire RSRX        // B18 -- Basys3 "RsRx": host TX -> FPGA RX
@@ -81,6 +93,7 @@ module BasysTop (
       start_sync <= {start_sync[1:0], BTNU};
   end
   wire start_armed = start_sync[2] & SW0;
+  wire [2:0] prog_sel = {SW3, SW2, SW1};
 
   // ------------------------------------------------------------------
   // DMI autoloader
@@ -98,6 +111,7 @@ module BasysTop (
     .clk            (sys_clk),
     .rst            (sys_reset),
     .start          (start_armed),
+    .prog_sel       (prog_sel),
     .dmi_req_valid  (dmi_req_valid),
     .dmi_req_ready  (dmi_req_ready),
     .dmi_req_addr   (dmi_req_addr),
@@ -114,6 +128,9 @@ module BasysTop (
   assign LED0 = loader_busy;
   assign LED1 = loader_done;
   assign LED2 = SW0;
+  assign LED3 = SW1;
+  assign LED4 = SW2;
+  assign LED5 = SW3;
 
   // ------------------------------------------------------------------
   // ChipTop instantiation

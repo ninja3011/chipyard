@@ -31,10 +31,16 @@ module tb_dmi;
     start = 1;
   end
 
+  reg [2:0] prog_sel_reg;
+  initial begin
+    if (!$value$plusargs("prog_sel=%d", prog_sel_reg)) prog_sel_reg = 0;
+  end
+
   DmiAutoloader autoloader (
     .clk            (clk),
     .rst            (rst),
     .start          (start),
+    .prog_sel       (prog_sel_reg),
     .dmi_req_valid  (dmi_req_valid),
     .dmi_req_ready  (dmi_req_ready),
     .dmi_req_addr   (dmi_req_addr),
