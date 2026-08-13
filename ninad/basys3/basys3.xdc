@@ -16,7 +16,8 @@ set_property -dict { PACKAGE_PIN T18  IOSTANDARD LVCMOS33 } [get_ports BTNU] ;# 
 set_property -dict { PACKAGE_PIN V17  IOSTANDARD LVCMOS33 } [get_ports SW0]  ;# sw[0]: arm/disarm the loader
 set_property -dict { PACKAGE_PIN V16  IOSTANDARD LVCMOS33 } [get_ports SW1]  ;# sw[1]: program select bit 0 (LSB)
 set_property -dict { PACKAGE_PIN W16  IOSTANDARD LVCMOS33 } [get_ports SW2]  ;# sw[2]: program select bit 1
-set_property -dict { PACKAGE_PIN W17  IOSTANDARD LVCMOS33 } [get_ports SW3]  ;# sw[3]: program select bit 2 (MSB)
+set_property -dict { PACKAGE_PIN W17  IOSTANDARD LVCMOS33 } [get_ports SW3]  ;# sw[3]: program select bit 2
+set_property -dict { PACKAGE_PIN W15  IOSTANDARD LVCMOS33 } [get_ports SW4]  ;# sw[4]: program select bit 3 (MSB)
 
 ## LEDs
 set_property -dict { PACKAGE_PIN U16  IOSTANDARD LVCMOS33 } [get_ports LED0] ;# led[0]: loader busy
@@ -25,6 +26,7 @@ set_property -dict { PACKAGE_PIN U19  IOSTANDARD LVCMOS33 } [get_ports LED2] ;# 
 set_property -dict { PACKAGE_PIN V19  IOSTANDARD LVCMOS33 } [get_ports LED3] ;# led[3]: mirrors SW1
 set_property -dict { PACKAGE_PIN W18  IOSTANDARD LVCMOS33 } [get_ports LED4] ;# led[4]: mirrors SW2
 set_property -dict { PACKAGE_PIN U15  IOSTANDARD LVCMOS33 } [get_ports LED5] ;# led[5]: mirrors SW3
+set_property -dict { PACKAGE_PIN U14  IOSTANDARD LVCMOS33 } [get_ports LED6] ;# led[6]: mirrors SW4
 
 ## USB-RS232 (routed over the same USB cable as programming, via the FTDI chip)
 set_property -dict { PACKAGE_PIN A18  IOSTANDARD LVCMOS33 } [get_ports RSTX]
@@ -37,9 +39,9 @@ set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
 set_property BITSTREAM.CONFIG.CONFIGRATE 33 [current_design]
 set_property CONFIG_MODE SPIx4 [current_design]
 
-## BTNC/BTNU/SW0-SW3 feed only asynchronous inputs of BasysTop.v's
+## BTNC/BTNU/SW0-SW4 feed only asynchronous inputs of BasysTop.v's
 ## synchronizers (reset_sync / start_sync) or are sampled combinationally
-## into a register on the same edge as start_armed (SW1-SW3 -> prog_sel),
+## into a register on the same edge as start_armed (SW1-SW4 -> prog_sel),
 ## so none of these are synchronous-timing paths.
 set_false_path -from [get_ports BTNC]
 set_false_path -from [get_ports BTNU]
@@ -47,3 +49,4 @@ set_false_path -from [get_ports SW0]
 set_false_path -from [get_ports SW1]
 set_false_path -from [get_ports SW2]
 set_false_path -from [get_ports SW3]
+set_false_path -from [get_ports SW4]

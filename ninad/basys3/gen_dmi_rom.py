@@ -5,7 +5,7 @@ from a compiled firmware.mem (riscv64-unknown-elf-objcopy -O verilog output).
 
 This exists so program transaction tables are generated mechanically, not
 hand-transcribed -- avoiding the exact class of transcription risk that was
-manually cross-checked (via objdump diff) for the original Hello World
+manually cross-checked (via objdump diff) for the original Hello Worldí
 table. Usage:
 
     python3 gen_dmi_rom.py <firmware.mem> <verilog_array_name>

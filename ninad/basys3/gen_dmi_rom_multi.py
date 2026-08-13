@@ -30,6 +30,7 @@ PROGRAMS = [
     (5, "bubblesort", "bubblesort/firmware.mem"),
     (6, "gameoflife", "gameoflife/firmware.mem"),
     (7, "timestable", "timestable/firmware.mem"),
+    (8, "spiral",     "spiral/firmware.mem"),
 ]
 
 NINAD_DIR = os.path.join(os.path.dirname(__file__), "..")

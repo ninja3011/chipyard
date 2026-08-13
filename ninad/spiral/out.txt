@@ -1,0 +1,37 @@
+Archimedean Spiral Web (TinyRocket, Q8.8 fixed point)
+Spinning a web...
+
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                       +         .                            
+                                                           .                  
+                                                                     .        
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+                                                                              
+
+  /\oo/\  
+ /      \ 
+=( o  o )=
+ \  ||  / 
+  \_||_/  
+
+Your friendly neighborhood spiral-slinger.
+With great radius comes great responsibility.
+Done.

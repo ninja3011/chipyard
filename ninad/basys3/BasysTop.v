@@ -33,14 +33,16 @@ module BasysTop (
   input  wire BTNU,       // T18 -- up pushbutton, active-high when pressed: start firmware load
 
   input  wire SW0,        // V17 -- slide switch 0: must be ON to arm the loader (safety interlock)
-  // SW1-SW3 form a 3-bit program select, sampled once when BTNU is pressed:
-  //   000=Hello World  001=Mandelbrot   010=Calculator   011=Fibonacci
-  //   100=Primes       101=Bubble sort  110=Game of Life 111=Times table
+  // SW1-SW4 form a 4-bit program select, sampled once when BTNU is pressed:
+  //   0000=Hello World  0001=Mandelbrot   0010=Calculator   0011=Fibonacci
+  //   0100=Primes       0101=Bubble sort  0110=Game of Life 0111=Times table
+  //   1000=Spiral Web
   // (see DmiAutoloader.v's "Program index" comment in the generated ROM
   // section, and gen_dmi_rom_multi.py's PROGRAMS list, for the same mapping)
   input  wire SW1,        // V16 -- program select bit 0 (LSB)
   input  wire SW2,        // W16 -- program select bit 1
-  input  wire SW3,        // W17 -- program select bit 2 (MSB)
+  input  wire SW3,        // W17 -- program select bit 2
+  input  wire SW4,        // W15 -- program select bit 3 (MSB)
 
   output wire LED0,       // U16 -- lit while the loader is running
   output wire LED1,       // E19 -- lit once the loader has finished
@@ -48,6 +50,7 @@ module BasysTop (
   output wire LED3,       // V19 -- mirrors SW1
   output wire LED4,       // W18 -- mirrors SW2
   output wire LED5,       // U15 -- mirrors SW3
+  output wire LED6,       // U14 -- mirrors SW4
 
   output wire RSTX,       // A18 -- Basys3 "RsTx": FPGA TX -> host RX
   input  wire RSRX        // B18 -- Basys3 "RsRx": host TX -> FPGA RX
@@ -93,7 +96,7 @@ module BasysTop (
       start_sync <= {start_sync[1:0], BTNU};
   end
   wire start_armed = start_sync[2] & SW0;
-  wire [2:0] prog_sel = {SW3, SW2, SW1};
+  wire [3:0] prog_sel = {SW4, SW3, SW2, SW1};
 
   // ------------------------------------------------------------------
   // DMI autoloader
@@ -131,6 +134,7 @@ module BasysTop (
   assign LED3 = SW1;
   assign LED4 = SW2;
   assign LED5 = SW3;
+  assign LED6 = SW4;
 
   // ------------------------------------------------------------------
   // ChipTop instantiation
