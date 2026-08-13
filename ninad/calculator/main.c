@@ -157,12 +157,12 @@ static i64 sin_deg(int d) {
 
 static i64 isqrt(i64 x) {
     if (x < 0) return 0;
-    if (x < (2LL << 16)) return FP_ONE;
+    if (x == 0) return 0;
     i64 root = x >> 1;
     for (int i = 0; i < 20; i++) {
         root = (root + (x / root)) >> 1;
     }
-    return root;
+    return root << 8;
 }
 
 static i64 ipow(i64 base, int exp) {
