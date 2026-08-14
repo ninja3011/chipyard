@@ -158,11 +158,17 @@ static i64 sin_deg(int d) {
 static i64 isqrt(i64 x) {
     if (x < 0) return 0;
     if (x == 0) return 0;
-    i64 root = x >> 1;
-    for (int i = 0; i < 20; i++) {
-        root = (root + (x / root)) >> 1;
+    unsigned long n = (unsigned long)(x >> 16);
+    unsigned long root = 0, bit = 1UL << 15;
+    while (bit > n) bit >>= 1;
+    while (bit) {
+        if (n >= root + bit) {
+            n -= root + bit;
+            root += bit << 1;
+        }
+        bit >>= 1;
     }
-    return root << 8;
+    return ((i64)root) << 16;
 }
 
 static i64 ipow(i64 base, int exp) {
