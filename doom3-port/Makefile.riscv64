@@ -1,0 +1,153 @@
+# Makefile for DOOM on RISC-V 64-bit
+# Target: BOOM CPU (RV64IMAFDv)
+# Platforms: Verilator simulation + AWS FPGA
+
+CC := riscv64-unknown-elf-gcc
+OBJDUMP := riscv64-unknown-elf-objdump
+
+# Directories
+DOOMGENERIC_DIR := doomgeneric/doomgeneric
+BUILD_DIR := build
+OUTPUT_DIR := output
+
+# RISC-V compiler flags
+CFLAGS := -O2 \
+          -march=rv64imafd \
+          -mabi=lp64d \
+          -Wall \
+          -I$(DOOMGENERIC_DIR) \
+          -DRANGECHECK \
+          -DNORMUNIX
+
+# Linker flags
+LDFLAGS := -static -lm
+
+# Output binary
+TARGET := $(OUTPUT_DIR)/doom.riscv
+
+# DOOM source files (from doomgeneric)
+DOOM_SOURCES := \
+    am_map.c \
+    d_event.c \
+    d_items.c \
+    d_iwad.c \
+    d_main.c \
+    d_net.c \
+    doomdef.c \
+    doomstat.c \
+    dstrings.c \
+    f_finale.c \
+    f_wipe.c \
+    g_game.c \
+    hu_lib.c \
+    hu_stuff.c \
+    info.c \
+    i_main.c \
+    i_system.c \
+    i_sound.c \
+    m_argv.c \
+    m_bbox.c \
+    m_cheat.c \
+    m_fixed.c \
+    m_menu.c \
+    m_misc.c \
+    m_random.c \
+    p_ceilng.c \
+    p_doors.c \
+    p_enemy.c \
+    p_floor.c \
+    p_inter.c \
+    p_lights.c \
+    p_map.c \
+    p_maputl.c \
+    p_plats.c \
+    p_pspr.c \
+    p_setup.c \
+    p_sight.c \
+    p_spec.c \
+    p_switch.c \
+    p_telept.c \
+    p_tick.c \
+    p_user.c \
+    r_bsp.c \
+    r_data.c \
+    r_draw.c \
+    r_main.c \
+    r_plane.c \
+    r_segs.c \
+    r_sky.c \
+    r_things.c \
+    s_sound.c \
+    sounds.c \
+    st_lib.c \
+    st_stuff.c \
+    tables.c \
+    v_video.c \
+    w_wad.c \
+    wi_stuff.c \
+    z_zone.c
+
+# Add platform and main
+SOURCES := $(DOOM_SOURCES) platform_riscv64.c main_riscv64.c
+
+# Object files
+OBJECTS := $(addprefix $(BUILD_DIR)/, $(SOURCES:.c=.o))
+
+# Phony targets
+.PHONY: all clean help
+
+# Default target
+all: $(TARGET)
+
+# Help
+help:
+	@echo "DOOM on RISC-V Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make all    - Build DOOM binary (default)"
+	@echo "  make clean  - Remove build artifacts"
+	@echo "  make help   - Show this help message"
+
+# Create directories
+$(BUILD_DIR) $(OUTPUT_DIR):
+	mkdir -p $@
+
+# Build rule for DOOM sources (from doomgeneric directory)
+$(BUILD_DIR)/%.o: $(DOOMGENERIC_DIR)/%.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Build rule for platform and main (from current directory)
+$(BUILD_DIR)/%.o: ./%.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Link executable
+$(TARGET): $(OBJECTS) | $(OUTPUT_DIR)
+	@echo "[LD] Linking DOOM..."
+	@$(CC) $(CFLAGS) $(LDFLAGS) $(OBJECTS) -o $@
+	@echo "✓ Build successful!"
+	@ls -lh $@
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Copy doom.riscv to filesystem"
+	@echo "  2. Boot Linux on BOOM simulator"
+	@echo "  3. Run: ./doom.riscv [doom1.wad]"
+
+# Clean
+clean:
+	@echo "Cleaning..."
+	@rm -rf $(BUILD_DIR) $(OUTPUT_DIR)
+	@echo "✓ Clean complete"
+
+# Print configuration
+.PHONY: config
+config:
+	@echo "Configuration:"
+	@echo "  CC: $(CC)"
+	@echo "  CFLAGS: $(CFLAGS)"
+	@echo "  LDFLAGS: $(LDFLAGS)"
+	@echo "  Build dir: $(BUILD_DIR)"
+	@echo "  Output: $(TARGET)"
+	@echo "  Sources: $(words $(SOURCES)) files"
+
