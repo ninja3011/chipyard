@@ -1,0 +1,29 @@
+# Minimal DOOM-like test for RISC-V
+CC := riscv64-unknown-elf-gcc
+
+BUILD_DIR := build
+OUTPUT_DIR := output
+TARGET := $(OUTPUT_DIR)/doom.riscv
+
+CFLAGS := -O2 -Wall -nostdlib -ffreestanding
+LDFLAGS := -static -T link.ld
+
+all: $(TARGET)
+
+$(BUILD_DIR) $(OUTPUT_DIR):
+	@mkdir -p $@
+
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(BUILD_DIR)/main_test.o | $(OUTPUT_DIR)
+	@echo "[LD] Linking..."
+	@$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -lc -lgcc
+	@echo "✅ Done! Binary: $@"
+	@ls -lh $@
+
+clean:
+	@rm -rf $(BUILD_DIR) $(OUTPUT_DIR)
+
+.PHONY: all clean

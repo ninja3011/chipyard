@@ -1,0 +1,68 @@
+# Simple Makefile for DOOM on RISC-V 64-bit
+# Uses only the files that actually exist
+
+CC := riscv64-unknown-elf-gcc
+AR := riscv64-unknown-elf-ar
+
+DOOMGENERIC_DIR := doomgeneric/doomgeneric
+BUILD_DIR := build
+OUTPUT_DIR := output
+
+CFLAGS := -O2 -Wall -I$(DOOMGENERIC_DIR) -DRANGECHECK -DNORMUNIX
+LDFLAGS := -static -lm
+
+TARGET := $(OUTPUT_DIR)/doom.riscv
+
+# DOOM core source files (only ones that exist)
+DOOM_SOURCES := \
+    am_map.c d_event.c d_items.c d_iwad.c d_loop.c d_main.c d_mode.c d_net.c \
+    doomdef.c doomstat.c dstrings.c f_finale.c f_wipe.c g_game.c hu_lib.c \
+    hu_stuff.c info.c i_system.c i_sound.c m_argv.c m_bbox.c m_cheat.c \
+    m_fixed.c m_menu.c m_misc.c m_random.c p_ceilng.c p_doors.c p_enemy.c \
+    p_floor.c p_inter.c p_lights.c p_map.c p_maputl.c p_plats.c p_pspr.c \
+    p_setup.c p_sight.c p_spec.c p_switch.c p_telept.c p_tick.c p_user.c \
+    r_bsp.c r_data.c r_draw.c r_main.c r_plane.c r_segs.c r_sky.c r_things.c \
+    s_sound.c sounds.c st_lib.c st_stuff.c tables.c v_video.c w_wad.c \
+    wi_stuff.c z_zone.c
+
+# Platform, main, and stubs
+PLATFORM_SOURCES := platform_riscv64.c main_riscv64.c stubs.c
+
+# Convert to object paths
+DOOM_OBJECTS := $(addprefix $(BUILD_DIR)/, $(DOOM_SOURCES:.c=.o))
+PLATFORM_OBJECTS := $(addprefix $(BUILD_DIR)/, $(PLATFORM_SOURCES:.c=.o))
+ALL_OBJECTS := $(DOOM_OBJECTS) $(PLATFORM_OBJECTS)
+
+.PHONY: all clean help
+
+all: $(TARGET)
+
+$(BUILD_DIR) $(OUTPUT_DIR):
+	mkdir -p $@
+
+# Build DOOM object files from doomgeneric directory
+$(BUILD_DIR)/%.o: $(DOOMGENERIC_DIR)/%.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Build platform/main object files from current directory
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Link executable
+$(TARGET): $(ALL_OBJECTS) | $(OUTPUT_DIR)
+	@echo "[LD] Linking DOOM..."
+	@$(CC) $(CFLAGS) $(LDFLAGS) $(ALL_OBJECTS) -o $@
+	@echo "✅ Build successful!"
+	@ls -lh $@
+
+clean:
+	rm -rf $(BUILD_DIR) $(OUTPUT_DIR)
+
+help:
+	@echo "DOOM on RISC-V Makefile"
+	@echo "  make all   - Build DOOM binary (default)"
+	@echo "  make clean - Remove build artifacts"
+	@echo "  make help  - Show this help"
+

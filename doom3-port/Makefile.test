@@ -1,0 +1,26 @@
+# Minimal test binary for RISC-V
+CC := riscv64-unknown-elf-gcc
+BUILD_DIR := build
+OUTPUT_DIR := output
+TARGET := $(OUTPUT_DIR)/doom.riscv
+
+CFLAGS := -O2 -Wall
+LDFLAGS := -static -lm
+
+all: $(TARGET)
+
+$(BUILD_DIR) $(OUTPUT_DIR):
+	@mkdir -p $@
+
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(BUILD_DIR)/minimal_test.o $(BUILD_DIR)/platform_minimal.o | $(OUTPUT_DIR)
+	@$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+	@echo "✅ Build successful!"
+	@ls -lh $@
+
+clean:
+	@rm -rf $(BUILD_DIR) $(OUTPUT_DIR)
+
+.PHONY: all clean

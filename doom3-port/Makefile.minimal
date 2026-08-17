@@ -1,0 +1,47 @@
+# Minimal DOOM build - just core rendering
+CC := riscv64-unknown-elf-gcc
+
+DOOMGENERIC_DIR := doomgeneric/doomgeneric
+BUILD_DIR := build
+OUTPUT_DIR := output
+
+CFLAGS := -O2 -Wall -I$(DOOMGENERIC_DIR) -DRANGECHECK -DNORMUNIX
+LDFLAGS := -static -lm
+
+TARGET := $(OUTPUT_DIR)/doom.riscv
+
+# Only the absolutely essential files
+DOOM_SOURCES := \
+    doomdef.c doomstat.c dstrings.c z_zone.c w_wad.c v_video.c \
+    tables.c sounds.c st_lib.c st_stuff.c d_main.c d_event.c d_net.c \
+    m_argv.c m_menu.c m_fixed.c m_misc.c m_cheat.c m_random.c m_bbox.c
+
+PLATFORM_SOURCES := platform_riscv64.c main_riscv64.c
+
+DOOM_OBJECTS := $(addprefix $(BUILD_DIR)/, $(DOOM_SOURCES:.c=.o))
+PLATFORM_OBJECTS := $(addprefix $(BUILD_DIR)/, $(PLATFORM_SOURCES:.c=.o))
+ALL_OBJECTS := $(DOOM_OBJECTS) $(PLATFORM_OBJECTS)
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(BUILD_DIR) $(OUTPUT_DIR):
+	@mkdir -p $@
+
+$(BUILD_DIR)/%.o: $(DOOMGENERIC_DIR)/%.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@echo "[CC] $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(ALL_OBJECTS) | $(OUTPUT_DIR)
+	@echo "[LD] Linking DOOM..."
+	@$(CC) $(CFLAGS) $(LDFLAGS) $(ALL_OBJECTS) -o $@
+	@echo "✅ Build successful!"
+	@ls -lh $@
+
+clean:
+	@rm -rf $(BUILD_DIR) $(OUTPUT_DIR)
