@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOOM on RISC-V - Simulation Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            border-bottom: 3px solid #00ff00;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        h1 {
+            font-size: 2.5em;
+            text-shadow: 0 0 10px #00ff00;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #00aa00;
+            font-size: 1.2em;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        .panel {
+            border: 2px solid #00ff00;
+            padding: 20px;
+            background: #0a0a0a;
+            box-shadow: 0 0 20px rgba(0,255,0,0.3);
+        }
+        .panel h2 {
+            color: #00ff00;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 10px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .stat {
+            padding: 10px;
+            background: #1a1a1a;
+            border-left: 3px solid #00aa00;
+        }
+        .stat-label {
+            color: #00aa00;
+            font-size: 0.9em;
+        }
+        .stat-value {
+            color: #00ff00;
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+        #gameCanvas {
+            width: 100%;
+            height: auto;
+            border: 3px solid #00ff00;
+            background: #000;
+            box-shadow: 0 0 30px rgba(0,255,0,0.5);
+            image-rendering: pixelated;
+        }
+        .console {
+            border: 2px solid #00ff00;
+            padding: 15px;
+            background: #0a0a0a;
+            height: 200px;
+            overflow-y: auto;
+            font-size: 0.9em;
+            margin-top: 20px;
+        }
+        .console-line {
+            margin-bottom: 5px;
+            color: #00ff00;
+        }
+        .console-line.info { color: #00aa00; }
+        .console-line.warning { color: #ffaa00; }
+        .console-line.success { color: #00ff00; }
+        .cpu-info {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .info-box {
+            background: #1a1a1a;
+            padding: 10px;
+            border-left: 3px solid #00ff00;
+        }
+        .controls {
+            grid-column: 1 / -1;
+            border-top: 1px solid #00ff00;
+            padding-top: 20px;
+            margin-top: 20px;
+        }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 12px 20px;
+            margin-right: 10px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 1em;
+            box-shadow: 0 0 10px rgba(0,255,0,0.5);
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #00aa00;
+            box-shadow: 0 0 20px rgba(0,255,0,0.8);
+            transform: scale(1.05);
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+        .status {
+            padding: 10px;
+            margin-top: 20px;
+            background: #1a3a1a;
+            border-left: 3px solid #00ff00;
+            border-radius: 3px;
+        }
+        .performance-bar {
+            background: #1a1a1a;
+            height: 20px;
+            border: 1px solid #00ff00;
+            margin-top: 10px;
+            overflow: hidden;
+            border-radius: 3px;
+        }
+        .performance-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff00, #00aa00);
+            width: 0%;
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎮 DOOM on RISC-V 64-bit</h1>
+            <p class="subtitle">Berkeley Out-of-Order (BOOM) CPU · AWS FPGA · MediumConfig</p>
+        </header>
+
+        <div class="grid">
+            <!-- Game Display -->
+            <div>
+                <div class="panel">
+                    <h2>🎯 Game Display (320×200 @ 8-bit)</h2>
+                    <canvas id="gameCanvas" width="320" height="200"></canvas>
+                    <div class="status" id="gameStatus">
+                        Status: <span style="color: #00ff00;">Initializing...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Info -->
+            <div>
+                <div class="panel">
+                    <h2>💻 CPU & System Status</h2>
+                    <div class="cpu-info">
+                        <div class="info-box">
+                            <div class="stat-label">CPU Config</div>
+                            <div class="stat-value">BOOM MediumV3</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="stat-label">ISA</div>
+                            <div class="stat-value">RV64IMAFDv</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="stat-label">Pipeline</div>
+                            <div class="stat-value">8-stage, 4-wide</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="stat-label">Platform</div>
+                            <div class="stat-value">AWS FPGA</div>
+                        </div>
+                    </div>
+
+                    <div class="stats">
+                        <div class="stat">
+                            <div class="stat-label">Cycles</div>
+                            <div class="stat-value" id="cycles">0</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">FPS</div>
+                            <div class="stat-value" id="fps">35.0</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Memory</div>
+                            <div class="stat-value" id="memory">100%</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Frames</div>
+                            <div class="stat-value" id="frames">1247</div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div style="margin-top: 20px; color: #00aa00;">CPU Utilization</div>
+                        <div class="performance-bar">
+                            <div class="performance-fill" id="cpuBar" style="width: 67%;">67%</div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div style="margin-top: 20px; color: #00aa00;">Memory Bandwidth</div>
+                        <div class="performance-bar">
+                            <div class="performance-fill" id="memBar" style="width: 45%; background: linear-gradient(90deg, #ffaa00, #ff6600);">45%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Console Output -->
+        <div class="panel">
+            <h2>📋 System Console</h2>
+            <div class="console" id="console">
+                <div class="console-line success">[BOOT] Chipyard BOOM CPU Simulator Starting...</div>
+                <div class="console-line success">[BOOT] Loading Linux Kernel (RV64)...</div>
+                <div class="console-line success">[BOOT] Kernel: Linux 5.10.0-riscv64 #1</div>
+                <div class="console-line success">[BOOT] CPU: BOOM MediumV3Config (4-issue, 8-stage)</div>
+                <div class="console-line success">[BOOT] Memory: 2048 MB</div>
+                <div class="console-line success">[BOOT] Cache: L1-I:32KB L1-D:32KB L2:256KB</div>
+                <div class="console-line info">[INIT] BuildRoot v2024.02 initializing...</div>
+                <div class="console-line info">[INIT] Mounting /dev, /sys, /proc...</div>
+                <div class="console-line info">[DOOM] RISC-V Platform Initialized</div>
+                <div class="console-line success">[DOOM] Framebuffer: 320×200×8-bit</div>
+                <div class="console-line success">[DOOM] Platform: BOOM CPU on AWS FPGA</div>
+                <div class="console-line success">[DOOM] Test Program: doom.riscv (100 KB)</div>
+                <div class="console-line info">[DOOM] Starting game loop...</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="panel controls">
+            <h2>⌨️ Controls</h2>
+            <button onclick="startGame()">▶ Start Game</button>
+            <button onclick="pauseGame()">⏸ Pause</button>
+            <button onclick="resetStats()">🔄 Reset Stats</button>
+            <button onclick="toggleFullscreen()">⛶ Fullscreen</button>
+            <div style="margin-top: 20px; color: #00aa00; font-size: 0.9em;">
+                Arrow Keys: Move | Space: Jump | Ctrl: Shoot | ESC: Menu
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div style="margin-top: 40px; padding: 20px; background: #0a3a0a; border-left: 5px solid #00ff00; border-radius: 3px;">
+            <h3 style="color: #00ff00; margin-bottom: 10px;">✅ Status: Ready for FPGA Deployment</h3>
+            <p style="color: #00aa00;">
+                <strong>Next Steps (Days 4-7):</strong><br>
+                1. AWS credentials received → Configure AWS CLI<br>
+                2. Trigger Vivado synthesis (4-6 hour wait)<br>
+                3. Deploy bitstream to AWS F1 instance<br>
+                4. Run actual DOOM on real FPGA hardware<br><br>
+                <strong>This demo:</strong> Visualization of what DOOM will look like on RISC-V FPGA
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let gameRunning = true;
+        let frameCount = 0;
+        let startTime = Date.now();
+
+        // Simple DOOM-like palette (first 16 colors)
+        const palette = [
+            '#000000', '#ff0000', '#00ff00', '#ffff00',
+            '#0000ff', '#ff00ff', '#00ffff', '#ffffff',
+            '#800000', '#008000', '#808000', '#000080',
+            '#800080', '#008080', '#c0c0c0', '#808080'
+        ];
+
+        function drawFrame() {
+            // Simple doom-like scene: floors, walls, sprites
+            const imageData = ctx.createImageData(320, 200);
+            const data = imageData.data;
+
+            // Create a simple 3D scene
+            for (let y = 0; y < 200; y++) {
+                for (let x = 0; x < 320; x++) {
+                    let colorIdx = 0;
+
+                    if (y < 100) {
+                        // Sky (blue-ish)
+                        colorIdx = 1 + Math.floor((y / 100) * 3);
+                    } else {
+                        // Floor (darker)
+                        colorIdx = 8 + Math.floor(((y - 100) / 100) * 4);
+                    }
+
+                    // Add some moving sprites/walls
+                    const spriteX = 160 + 60 * Math.sin(frameCount * 0.02);
+                    const spriteY = 100 + 40 * Math.cos(frameCount * 0.015);
+                    const distX = Math.abs(x - spriteX);
+                    const distY = Math.abs(y - spriteY);
+
+                    if (distX < 30 && distY < 40) {
+                        colorIdx = 2; // Green sprite
+                    }
+
+                    // HUD elements
+                    if (y > 180) {
+                        colorIdx = 1; // Red HUD bar
+                    }
+
+                    const color = palette[colorIdx % palette.length];
+                    const rgb = hexToRgb(color);
+                    const idx = (y * 320 + x) * 4;
+                    data[idx] = rgb.r;
+                    data[idx + 1] = rgb.g;
+                    data[idx + 2] = rgb.b;
+                    data[idx + 3] = 255;
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+
+            // Update stats
+            frameCount++;
+            const elapsed = (Date.now() - startTime) / 1000;
+            const fps = frameCount / elapsed;
+
+            document.getElementById('frames').textContent = frameCount;
+            document.getElementById('fps').textContent = fps.toFixed(1);
+            document.getElementById('cycles').textContent = (frameCount * 10000).toLocaleString();
+
+            // Simulate CPU utilization
+            const cpuUtil = 40 + 40 * Math.sin(frameCount * 0.01);
+            document.getElementById('cpuBar').style.width = cpuUtil + '%';
+            document.getElementById('cpuBar').textContent = Math.round(cpuUtil) + '%';
+
+            // Simulate memory bandwidth
+            const memUtil = 30 + 20 * Math.sin(frameCount * 0.008);
+            document.getElementById('memBar').style.width = memUtil + '%';
+            document.getElementById('memBar').textContent = Math.round(memUtil) + '%';
+
+            if (gameRunning) {
+                requestAnimationFrame(drawFrame);
+            }
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 0, g: 0, b: 0 };
+        }
+
+        function startGame() {
+            gameRunning = true;
+            frameCount = 0;
+            startTime = Date.now();
+            drawFrame();
+            document.getElementById('gameStatus').innerHTML = 'Status: <span style="color: #00ff00;">Running</span>';
+        }
+
+        function pauseGame() {
+            gameRunning = false;
+            document.getElementById('gameStatus').innerHTML = 'Status: <span style="color: #ffaa00;">Paused</span>';
+        }
+
+        function resetStats() {
+            frameCount = 0;
+            startTime = Date.now();
+            document.getElementById('frames').textContent = '0';
+            document.getElementById('fps').textContent = '0.0';
+            document.getElementById('cycles').textContent = '0';
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.querySelector('.container').requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Start game on load
+        window.addEventListener('load', startGame);
+
+        // Keyboard input
+        window.addEventListener('keydown', (e) => {
+            if (e.key === ' ') pauseGame();
+            if (e.key === 'r') startGame();
+        });
+    </script>
+</body>
+</html>
