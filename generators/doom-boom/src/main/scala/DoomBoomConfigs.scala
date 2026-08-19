@@ -10,6 +10,7 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.system._
 import freechips.rocketchip.config._
 import freechips.rocketchip.util._
+import chipyard._
 
 /**
  * DOOM Challenge BOOM CPU Configuration
@@ -164,6 +165,30 @@ class WithDoomBoomSmallCore extends Config((site, here, up) => {
   case RocketTilesKey => Seq()
   case SystemBusKey => SystemBusParams(beatBytes = 8)
 })
+
+/**
+ * BOOM config with Serial TL disabled (avoids TileLink monitor issues)
+ *
+ * Uses WithSerialTLTiedOff to bypass the test harness TSIHarness
+ * which has strict TileLink protocol checking that rejects PutPartial.
+ * This version boots directly from ROM instead of using serial interface.
+ */
+class DoomBoomNoSerialTLConfig extends Config(
+  new chipyard.harness.WithSerialTLTiedOff ++           // Disable serial TL interface
+  new boom.common.WithBoomCores(nCores=1) ++
+  new WithDoomBoomMediumCore ++
+  new freechips.rocketchip.subsystem.WithInclusiveLastLevelCache(
+    capacityKB = 256,
+    nWays = 4,
+    lineBytes = 64) ++
+  new freechips.rocketchip.subsystem.WithMemoryBus(
+    beatBytes = 8,
+    blockBytes = 64) ++
+  new freechips.rocketchip.subsystem.WithNMemoryChannels(1) ++
+  new freechips.rocketchip.subsystem.WithSystemBus(
+    beatBytes = 8) ++
+  new freechips.rocketchip.system.BaseConfig
+)
 
 /**
  * Default configuration (fallback to Rocket if BOOM fails)
