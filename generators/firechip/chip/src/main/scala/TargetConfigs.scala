@@ -256,6 +256,14 @@ class FireSimLargeBoomConfig extends Config(
   new WithFireSimConfigTweaks ++
   new chipyard.LargeBoomV3Config)
 
+// DOOMBOOM: our custom BOOM config, wired for real FireSim/F2 deployment.
+// Mirrors FireSimLargeBoomConfig exactly, just based on MediumBoomV3Config
+// (the same core we've been validating on Spike/QEMU/Verilator all along).
+class FireSimMediumBoomV3Config extends Config(
+  new WithDefaultFireSimBridges ++
+  new WithFireSimConfigTweaks ++
+  new chipyard.MediumBoomV3Config)
+
 //*****************************************************************
 // Saturn configs, base off chipyard's SaturnConfigs
 //*****************************************************************

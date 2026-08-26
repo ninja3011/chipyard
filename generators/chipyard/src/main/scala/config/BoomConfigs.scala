@@ -15,6 +15,15 @@ class MediumBoomV3Config extends Config(
   new boom.v3.common.WithNMediumBooms(1) ++                         // medium boom config
   new chipyard.config.AbstractConfig)
 
+// Same as MediumBoomV3Config, but with TileLink monitors stripped at
+// RTL-generation time (not just runtime-suppressed via +noassert).
+// FireSim's own BOOM target configs do this; our software-sim config
+// never did. Docs claim ~2x sim speedup from this alone.
+class FastMediumBoomV3Config extends Config(
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new boom.v3.common.WithNMediumBooms(1) ++
+  new chipyard.config.AbstractConfig)
+
 class LargeBoomV3Config extends Config(
   new boom.v3.common.WithNLargeBooms(1) ++                          // large boom config
   new chipyard.config.WithSystemBusWidth(128) ++
