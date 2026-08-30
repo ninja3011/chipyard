@@ -68,13 +68,28 @@ CFLAGS := $(ARCH_FLAGS) -Os -ggdb3 -Wall \
 LDFLAGS := $(ARCH_FLAGS) -specs=nano.specs -Wl,-Ttext-segment=0x80000000 \
 	-Wl,--gc-sections -Wl,-Map,$(OUTPUT).map
 
+# Bad Apple player: separate ELF, same runtime foundation (syscalls.c),
+# targets RocketArty100TVGAConfig's VGA framebuffer at 0x04000000 directly
+# -- see badapple_arty100t.c's header comment. Not combined into one boot
+# image with DOOM: loaded one at a time via uart_tsi, which is how bring-up
+# will actually use it, and avoids a needless menu/selector system.
+BADAPPLE_OUTPUT := badapple-arty100t.elf
+BADAPPLE_SRC_C := badapple_arty100t.c badapple_syscalls.c
+BADAPPLE_SRC_S := badapple_vidf_embed.S
+VIDF_DIR := ../../video
+VIDF_FILE_NAME := bad-apple.vidf
+
+BADAPPLE_CFLAGS := $(CFLAGS) -DVIDF_FILE='"bad-apple.vidf"'
+
 OBJDIR := build
 DOOM_OBJS := $(addprefix $(OBJDIR)/, $(SRC_DOOM:.c=.o))
 PLATFORM_OBJS := $(addprefix $(OBJDIR)/, $(PLATFORM_SRC_C:.c=.o) $(PLATFORM_SRC_S:.S=.o))
 OBJS := $(DOOM_OBJS) $(PLATFORM_OBJS)
+BADAPPLE_OBJS := $(addprefix $(OBJDIR)/badapple_, $(notdir $(BADAPPLE_SRC_C:.c=.o)) $(notdir $(BADAPPLE_SRC_S:.S=.o)))
 
-.PHONY: all clean wad-check
+.PHONY: all clean wad-check vidf-check badapple
 all: wad-check $(OUTPUT)
+badapple: vidf-check $(BADAPPLE_OUTPUT)
 
 # .incbin in wad_embed.S resolves relative to the assembler's cwd, so
 # symlink the real WAD in here rather than fighting include-path rules
@@ -84,12 +99,32 @@ wad-check:
 		ln -sf $(WAD_DIR)/freedoom1.wad freedoom1.wad; \
 	fi
 
+vidf-check:
+	@if [ ! -e bad-apple.vidf ]; then \
+		ln -sf $(VIDF_DIR)/bad-apple.vidf bad-apple.vidf; \
+	fi
+
 $(OUTPUT): $(OBJS)
 	@echo [Linking $@]
 	$(CC) $(LDFLAGS) $(OBJS) -o $(OUTPUT)
 	$(SIZE) $(OUTPUT)
 
-$(OBJS): | $(OBJDIR)
+$(BADAPPLE_OUTPUT): $(BADAPPLE_OBJS)
+	@echo [Linking $@]
+	$(CC) $(ARCH_FLAGS) -specs=nano.specs -Wl,-Ttext-segment=0x80000000 \
+		-Wl,--gc-sections -Wl,-Map,$(BADAPPLE_OUTPUT).map \
+		$(BADAPPLE_OBJS) -o $(BADAPPLE_OUTPUT)
+	$(SIZE) $(BADAPPLE_OUTPUT)
+
+$(OBJDIR)/badapple_%.o: %.c
+	@echo [Compiling $<]
+	$(CC) $(BADAPPLE_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/badapple_%.o: %.S
+	@echo [Assembling $<]
+	$(CC) $(BADAPPLE_CFLAGS) -c $< -o $@
+
+$(OBJS) $(BADAPPLE_OBJS): | $(OBJDIR)
 
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
@@ -115,3 +150,4 @@ $(OBJDIR)/%.o: %.S
 clean:
 	rm -rf $(OBJDIR)
 	rm -f $(OUTPUT) $(OUTPUT).map freedoom1.wad
+	rm -f $(BADAPPLE_OUTPUT) $(BADAPPLE_OUTPUT).map bad-apple.vidf

@@ -45,6 +45,18 @@ class RocketArty100TConfig extends Config(
   new chipyard.config.WithBroadcastManager ++ // no l2
   new chipyard.RocketConfig)
 
+// Adds a monochrome VGA framebuffer (DOOM + Bad Apple bring-up target) on
+// top of the already-clean RocketArty100TConfig. Kept as a separate
+// config, not a modification of RocketArty100TConfig itself, so the new
+// hardware's risk (a brand new peripheral, never synthesized before) is
+// isolated from the already-verified, already-committed clean-timing build.
+class RocketArty100TVGAConfig extends Config(
+  new WithArty100TVGA ++
+  new chipyard.vga.WithVGAFramebuffer(address = 0x4000000L) ++
+  new WithArty100TTweaks ++
+  new chipyard.config.WithBroadcastManager ++ // no l2
+  new chipyard.RocketConfig)
+
 class NoCoresArty100TConfig extends Config(
   new WithArty100TTweaks ++
   new chipyard.config.WithBroadcastManager ++ // no l2

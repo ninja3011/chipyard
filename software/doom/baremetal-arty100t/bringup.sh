@@ -1,20 +1,40 @@
 #!/bin/bash
 # Ready-to-run Arty A7-100T bring-up script.
-# Run this the moment the board is plugged in and the bitstream is programmed.
-# Usage: ./bringup.sh [/dev/ttyUSBx]
+# Run this the moment the board is plugged in, programmed with
+# Arty100THarness.bit (RocketArty100TVGAConfig -- see program_bitstream.tcl),
+# and usbipd-attached into WSL.
+# Usage: ./bringup.sh <doom|badapple> [/dev/ttyUSBx]
 set -e
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UART_TSI="$HERE/../../../generators/testchipip/uart_tsi/uart_tsi"
-ELF="$HERE/doom-arty100t.elf"
-TTY="${1:-}"
+
+PAYLOAD="${1:-}"
+TTY="${2:-}"
+
+case "$PAYLOAD" in
+  doom)
+    ELF="$HERE/doom-arty100t.elf"
+    LOAD_MINUTES="5-6 minutes (30.7MB, dominated by the embedded 28.8MB Freedoom WAD)"
+    READY_LINE="[doom] arty100t bare-metal backend up (VGA framebuffer @ 0x04000000)"
+    ;;
+  badapple)
+    ELF="$HERE/badapple-arty100t.elf"
+    LOAD_MINUTES="9-10 minutes (52.6MB, dominated by the embedded .vidf video)"
+    READY_LINE="[badapple] loaded, playing"
+    ;;
+  *)
+    echo "Usage: $0 <doom|badapple> [/dev/ttyUSBx]"
+    exit 1
+    ;;
+esac
 
 if [ -z "$TTY" ]; then
   echo "No TTY given. Devices currently present:"
   ls -la /dev/ttyUSB* 2>/dev/null || echo "  (none found -- has the board been usbipd-attached into WSL yet?"
   echo "   Run on Windows: usbipd list; usbipd bind --busid <ID>; usbipd attach --wsl --busid <ID>)"
   echo ""
-  echo "Usage: $0 /dev/ttyUSBx"
+  echo "Usage: $0 $PAYLOAD /dev/ttyUSBx"
   exit 1
 fi
 
@@ -24,7 +44,7 @@ if [ ! -x "$UART_TSI" ]; then
 fi
 
 if [ ! -f "$ELF" ]; then
-  echo "$ELF not found -- run 'make' in this directory first."
+  echo "$ELF not found -- run 'make' (doom) or 'make badapple' in this directory first."
   exit 1
 fi
 
@@ -33,24 +53,27 @@ echo "=== Step 1: self-check the binary loads correctly (no boot yet) ==="
 echo "Self-check passed."
 echo ""
 
-echo "=== Step 2: real boot ==="
-echo "Loading and running doom-arty100t.elf (30.7MB -- this WAD-embedded"
-echo "binary takes roughly 5-6 minutes to transfer over UART-TSI at typical"
-echo "baud rates; this is expected, not a hang -- see"
-echo "ARTY-A7-100T-BRINGUP-PREP-REPORT.md section 6)."
+echo "=== Step 2: real boot ($PAYLOAD) ==="
+echo "Loading and running $(basename "$ELF") -- this takes roughly $LOAD_MINUTES"
+echo "over UART-TSI at typical baud rates; this is expected, not a hang."
 echo ""
 echo "What 'it's working' looks like, in order:"
-echo "  1. uart_tsi reports the binary loading (progress, if it prints any)"
+echo "  1. uart_tsi reports the binary loading"
 echo "  2. Once running, the UART console should print:"
-echo "       [doom] arty100t bare-metal backend up"
-echo "     immediately followed by (since no VGA peripheral exists yet):"
-echo "       [doom] WARNING: no framebuffer peripheral yet -- rendering is happening but not visible"
-echo "  3. Try typing 'w', 'a', 's', 'd', space, enter into this terminal --"
-echo "     if the UART console is working, keypresses are being read (no"
-echo "     visible confirmation without a display, but no crash either)."
-echo "  4. If the board resets or the console goes silent without the"
-echo "     backend-up message ever printing, that's a real bug to chase --"
-echo "     not the expected slow-WAD-load behavior."
+echo "       $READY_LINE"
+echo "  3. On a real monitor connected to the VGA breakout on JA (pins"
+echo "     G13=HSYNC, B11=VSYNC, A11=VIDEO -- see"
+echo "     fpga/src/main/scala/arty100t/VGAHarnessBinder.scala), a"
+echo "     monochrome 640x480 image should appear within a second or two"
+echo "     of that console line printing."
+if [ "$PAYLOAD" = "doom" ]; then
+echo "  4. Try typing 'w', 'a', 's', 'd', space, enter into this terminal --"
+echo "     these should move/turn/fire in-game if the console UART and the"
+echo "     VGA output are both working."
+fi
+echo "  5. If the board resets or the console goes silent without the"
+echo "     ready line ever printing, that's a real bug to chase -- not the"
+echo "     expected slow-load behavior."
 echo ""
 echo "Starting..."
 "$UART_TSI" +tty="$TTY" "$ELF"

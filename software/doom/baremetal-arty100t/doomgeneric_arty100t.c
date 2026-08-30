@@ -1,13 +1,13 @@
 // doomgeneric backend for bare-metal RocketArty100TConfig.
 //
-// Video: DG_DrawFrame writes DG_ScreenBuffer to a memory-mapped framebuffer
-// that DOES NOT EXIST YET in the current elaborated design (confirmed via
-// the real address map generated 2026-08-28 -- there is no framebuffer
-// peripheral in RocketArty100TConfig today). FRAMEBUFFER_BASE below is a
-// placeholder; it must be replaced with the real address once the Pmod VGA
-// timing-generator peripheral (ARTY-A7-100T-PROJECT-SCOPE.md, Tier 1b) is
-// designed and elaborated. Everything else in this file does not depend on
-// that peripheral and is real, not a placeholder.
+// Video: DG_DrawFrame downsamples+thresholds DG_ScreenBuffer (640x400 RGBA,
+// doomgeneric's default resolution) into the real monochrome VGA
+// framebuffer added by chipyard.vga.TLVGAFramebuffer (RocketArty100TVGAConfig
+// only -- the plain RocketArty100TConfig build has no such peripheral and
+// must not be linked against this build variant). The peripheral is
+// 320x240, 1 bit/pixel, packed 32 pixels/word; DOOM's 640x400 is nearest-
+// neighbor downsampled 2x to 320x200 and vertically centered (20-row
+// letterbox top and bottom) rather than stretched, to avoid distortion.
 //
 // Input: DG_GetKey polls the same UART console already wired up in
 // RocketArty100TConfig (confirmed: serial@0x10020000, sifive,uart0, 50MHz
@@ -25,10 +25,24 @@
 #include "uart.h"
 #include <stdint.h>
 
-// TODO(hardware): replace once the VGA framebuffer peripheral exists.
-// See ARTY-A7-100T-PROJECT-SCOPE.md, Tier 1b.
-#define FRAMEBUFFER_BASE 0x00000000UL /* placeholder -- not a real address */
-#define FRAMEBUFFER_READY 0
+// Real address: chosen directly in the Chisel config
+// (RocketArty100TVGAConfig's WithVGAFramebuffer(address = 0x4000000L)),
+// not discovered after the fact -- we control it, so it's not a guess.
+#define FRAMEBUFFER_BASE 0x04000000UL
+#define FB_WIDTH 320
+#define FB_HEIGHT 240
+#define FB_BYTES_PER_ROW (FB_WIDTH / 8)
+#define FB_ROW_OFFSET_Y ((FB_HEIGHT - DOOMGENERIC_RESY / 2) / 2) /* letterbox */
+
+static inline int sampleThreshold(int srcX, int srcY) {
+  // DG_ScreenBuffer is BGRA (doomgeneric's convention on every backend in
+  // this project so far); channel 0 (B) carries the on/off signal for our
+  // thresholded monochrome output, matching the netstream/video pipeline's
+  // existing convention.
+  uint32_t px = DG_ScreenBuffer[srcY * DOOMGENERIC_RESX + srcX];
+  uint8_t b = (uint8_t)(px & 0xFF);
+  return b >= 128;
+}
 
 // mtime tick rate: confirmed (not assumed) from this exact config's own
 // generated DTS -- `timebase-frequency = <50000>` under /cpus, in
@@ -84,18 +98,31 @@ static unsigned char mapByteToDoomKey(unsigned char c) {
 void DG_Init(void) {
   uart_init();
   s_startTimeTicks = rdtime();
-  uart_puts("\r\n[doom] arty100t bare-metal backend up\r\n");
-  if (!FRAMEBUFFER_READY) {
-    uart_puts("[doom] WARNING: no framebuffer peripheral yet -- rendering is happening but not visible\r\n");
-  }
+  uart_puts("\r\n[doom] arty100t bare-metal backend up (VGA framebuffer @ 0x04000000)\r\n");
 }
 
 void DG_DrawFrame(void) {
-  if (!FRAMEBUFFER_READY) return; // nothing to draw to yet, see header comment
-  volatile uint32_t *fb = (volatile uint32_t *)FRAMEBUFFER_BASE;
-  const uint32_t *src = (const uint32_t *)DG_ScreenBuffer;
-  for (int i = 0; i < DOOMGENERIC_RESX * DOOMGENERIC_RESY; i++) {
-    fb[i] = src[i];
+  // Plain packed-byte memory now (TLManagerNode over a byte-addressable
+  // Mem, not the earlier per-word regmap scheme) -- MSB-first per byte,
+  // matching the .vidf format's own convention (video2frames.py's
+  // pack_1bit), so both DOOM and Bad Apple agree with the VGA hardware's
+  // bit ordering without any reversal anywhere.
+  volatile uint8_t *fb = (volatile uint8_t *)FRAMEBUFFER_BASE;
+
+  for (int y = 0; y < FB_HEIGHT; y++) {
+    int srcY2 = y - FB_ROW_OFFSET_Y; // row within the centered 200-row image
+    for (int xByte = 0; xByte < FB_BYTES_PER_ROW; xByte++) {
+      uint8_t byteVal = 0;
+      for (int bit = 0; bit < 8; bit++) {
+        int x = xByte * 8 + bit;
+        int on = 0;
+        if (srcY2 >= 0 && srcY2 < DOOMGENERIC_RESY / 2) {
+          on = sampleThreshold(x * 2, srcY2 * 2);
+        }
+        byteVal |= (on ? 1u : 0u) << (7 - bit); // MSB-first
+      }
+      fb[y * FB_BYTES_PER_ROW + xByte] = byteVal;
+    }
   }
 }
 

@@ -63,6 +63,7 @@ class AbstractConfig extends Config(
   new chipyard.iobinders.WithTraceIOPunchthrough ++
   new chipyard.iobinders.WithUARTTSIPunchthrough ++
   new chipyard.iobinders.WithGCDIOPunchthrough ++
+  new chipyard.iobinders.WithVGAFramebufferIOPunchthrough ++
   new chipyard.iobinders.WithNMITiedOff ++
   new chipyard.iobinders.WithOffchipBusSel ++
 
