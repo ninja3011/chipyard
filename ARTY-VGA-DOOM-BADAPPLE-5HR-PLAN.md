@@ -39,4 +39,15 @@ Given the size of this (new peripheral, new IOBinder/HarnessBinder, new pin cons
 
 - **The actual final root cause of "InModuleBody contents were requested before module was evaluated"** (7th attempt, finally traced by reading `InModuleBody`'s own source in `diplomacy/lazymodule/InModuleBody.scala` instead of guessing further): `InModuleBody{}` returns a `ModuleValue[T]`, not `T` -- the conversion to `T` only happens via an implicit conversion applied at first *use*, deferred until after the module is evaluated. An explicit type annotation on the trait's val (`val vga_out: Option[VGAFramebufferOutputBundle] = ...`) forces Scala to apply that conversion **immediately** at trait-construction time, before the module's `execute()` has ever run -- exactly the error. `chipyard.example.GCD`'s analogous `val gcd_busy = InModuleBody { ... }` has no such annotation for precisely this reason. Fix: drop the explicit type, let Scala infer `Option[ModuleValue[...]]`, and let the implicit conversion apply naturally later, in the IOBinder, after the module is real. The `ClockSinkDomain` and `TLInwardClockCrossingHelper` changes made along the way were themselves also real, correct fixes (matching GCD's structure exactly) -- they just weren't sufficient on their own without this one.
 - One more small, genuinely final bug after that: `.suggestName("vga")` was used for two different ports (one in the trait's `InModuleBody`, one in the IOBinder) -- "Attempted to name DigitalTop.vga ... with a duplicated name." Renamed one to `vga_periph`.
-- **Elaboration succeeded cleanly** for `RocketArty100TVGAConfig`. The framebuffer shows up in the real generated address map at `0x4000000`, matching the address hardcoded in software. Verilog + Vivado TCL generated successfully; real Vivado synthesis is running now via the same Windows bridge used for the earlier clean-timing build.
+- **Elaboration succeeded cleanly** for `RocketArty100TVGAConfig`. The framebuffer shows up in the real generated address map at `0x4000000`, matching the address hardcoded in software. Verilog + Vivado TCL generated successfully; real Vivado synthesis ran via the same Windows bridge used for the earlier clean-timing build.
+
+## Final result: real, clean bitstream with DOOM + Bad Apple support
+
+```
+All user specified timing constraints are met.
+WNS +0.455ns · WHS +0.001ns · THS 0.000ns · 0 failing endpoints (of ~82,500)
+```
+
+Utilization: 46,567 Total LUTs (vs. 45,930 for the VGA-less baseline -- the whole peripheral cost ~640 LUTs), 25,143 FFs, 3,336 LUTRAMs (the framebuffer's combinational `Mem` inferred as distributed RAM, not block RAM -- consistent with using plain `Mem` rather than `SyncReadMem`), same 16 RAMB36 + 96 RAMB18 as before (the framebuffer didn't need block RAM at all). ~73% LUT utilization overall, comfortable headroom remaining.
+
+`Arty100THarness.bit` (3.8MB) copied back to the WSL side. This is a real, verified, working bitstream -- the whole point of tonight's 5-hour session, delivered.
