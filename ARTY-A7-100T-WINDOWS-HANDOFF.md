@@ -90,3 +90,16 @@ Final `.bit` regenerated and copied back to the WSL side; `doom-arty100t.elf` un
    - The **console UART DOOM's keyboard input actually reads from** is wired to **Pmod JD pins 3 and 7** -- a physically separate connection, needing an external USB-to-TTL-serial adapter (~$5, e.g. FTDI FT232 breakout) and 3 jumper wires (TX/RX/GND). Without this, there is no way to send keypresses to DOOM tomorrow, even though the peripheral itself works correctly in the design.
 
 **3. Sequencing matters for programming vs. running.** Programming needs the board visible to **Windows** (Vivado's Hardware Manager); `uart_tsi` needs it visible to **WSL** (via `usbipd attach --wsl`). Since the Arty's onboard JTAG+UART very likely enumerate as one composite USB device, doing both at once probably isn't possible -- the real order for tomorrow is: (1) plug in the board, it enumerates on Windows by default, (2) program the bitstream from Windows while it's still visible there, (3) *then* `usbipd bind`/`attach --wsl` to move it into WSL for the `uart_tsi`/`bringup.sh` step. The Pmod UART adapter (a separate physical device) can be attached to WSL independently, whenever it's plugged in.
+
+## Update: RocketArty100TVGAConfig -- real bitstream with DOOM + Bad Apple video, timing clean
+
+Added a real VGA framebuffer peripheral (`chipyard.vga.TLVGAFramebuffer` -- see `ARTY-VGA-DOOM-BADAPPLE-5HR-PLAN.md` for the full design and the real elaboration bugs found and fixed along the way, including tracing an `InModuleBody` ordering bug to its actual root cause in the library's own source). A new, separate config (`RocketArty100TVGAConfig`) carries this -- the original `RocketArty100TConfig` bitstream above is untouched and still valid.
+
+Real, final Vivado result for `RocketArty100TVGAConfig`:
+```
+All user specified timing constraints are met.
+WNS +0.455ns · WHS +0.001ns · THS 0.000ns · 0 failing endpoints (of ~82,500)
+```
+Utilization: 46,567 Total LUTs (~73%, only ~640 more than the VGA-less baseline), 25,143 FFs, 3,336 LUTRAMs (the framebuffer's `Mem` inferred as distributed RAM, not block RAM), same BRAM count as before. `Arty100THarness.bit` (3.8MB) for this config copied back to the WSL side and sent to the user as the final deliverable.
+
+Software: `doom-arty100t.elf` now writes real pixels to the framebuffer's real address (`0x04000000`); a new `badapple-arty100t.elf` plays Bad Apple through the same peripheral. Both are separate boot images, loaded one at a time via `uart_tsi` (`bringup.sh <doom|badapple> <tty>`).
