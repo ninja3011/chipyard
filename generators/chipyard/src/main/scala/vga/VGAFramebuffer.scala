@@ -53,8 +53,23 @@ case object VGAFramebufferKey extends Field[Option[VGAFramebufferParams]](None)
 class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p: Parameters) extends ClockSinkDomain(ClockSinkParameters())(p) {
   val fbWidth = 320
   val fbHeight = 240
-  val fbBytes = (fbWidth * fbHeight) / 8 // 1 bit/pixel
-  val addressSet = AddressSet(params.address, fbBytes - 1)
+  val fbBytes = (fbWidth * fbHeight) / 8 // 1 bit/pixel = 9600 bytes
+  // AddressSet's mask must be a contiguous run of low-order 1 bits
+  // (base-2 power minus one) to decode a single contiguous range --
+  // 9600 isn't a power of two, so `fbBytes - 1` (0x257f) is NOT
+  // contiguous (0b10010101111111) and was silently accepted as a valid
+  // but wrong AddressSet: a *sparse*, checkered decode (real chunks only
+  // at 0x0-0x7f, 0x100-0x17f, 0x400-0x47f, ...; addresses like 0x80 or
+  // 0x200 simply don't decode to this device at all). Caught by the new
+  // full-SoC integration test hitting real addresses across the whole
+  // framebuffer range -- the earlier isolated unit test only ever wrote
+  // to address 0x0, which happens to land inside a valid chunk, so it
+  // never exercised this. Fixed by rounding the address region up to the
+  // next power of two (16384 bytes here) -- the Mem itself still only
+  // needs to be big enough to back that decode width; addresses beyond
+  // the real 9600-byte image simply hold unused storage.
+  val addressSetBytes = { var n = 1; while (n < fbBytes) n = n << 1; n }
+  val addressSet = AddressSet(params.address, addressSetBytes - 1)
 
   val device = new MemoryDevice
   val node = TLManagerNode(Seq(TLSlavePortParameters.v1(
