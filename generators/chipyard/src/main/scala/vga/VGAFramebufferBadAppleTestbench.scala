@@ -221,6 +221,25 @@ class VGAFramebufferBadAppleTestHarness(implicit p: Parameters) extends LazyModu
       }
     }
 
+    // ---------------- Step 4: dump the real, actually-scanned-out frame ----------------
+    // Reconstructs the visible image from the DUT's real io.vga_video
+    // output (not the expected/reference model) so it can be rendered as
+    // a real picture -- proof of what the hardware actually produces, not
+    // just a pass/fail bit. 2x pixel-doubling means each real column is
+    // scanned twice in a row (and each row twice, from vCount doubling);
+    // only accumulating/printing on frameX's *second* visit per row
+    // (after both hCount phases for the last column have landed) keeps
+    // exactly one dump per row instead of two duplicates.
+    val rowAccum = RegInit(0.U(frameWidth.W))
+    when(checkThisCycle) {
+      val newAccum = rowAccum | (dut.module.io.vga_video << fbX)(frameWidth - 1, 0)
+      rowAccum := newAccum
+      when(fbX === (frameWidth - 1).U) {
+        printf("FRAMEDUMP row=%d bits=%x\n", frameY, newAccum)
+        rowAccum := 0.U
+      }
+    }
+
     // One full deterministic period (hTotal*vTotal*2 cycles) is guaranteed
     // to visit every (hCount, vCount) combination exactly once, regardless
     // of the phase we started counting at -- no need to resynchronize to
