@@ -15,7 +15,12 @@ occurrence order they land in.
 
 Usage:
     ./simulator-chipyard.unittest-VGAFramebufferBadAppleUnitTestConfig +verbose | \
-        python3 render_framedump.py output.png
+        python3 render_framedump.py output.png [height]
+
+Height defaults to 200 (Bad Apple's native visible rows) if not given,
+but is auto-detected from the highest row number seen in the dump when
+that's larger (e.g. 240 for the DOOM testbench, which dumps the full
+framebuffer including its own blank letterbox rows).
 """
 import re
 import sys
@@ -23,16 +28,17 @@ import sys
 from PIL import Image
 
 WIDTH = 320
-HEIGHT = 200
+DEFAULT_HEIGHT = 200
 
 LINE_RE = re.compile(r"FRAMEDUMP row=\s*(\d+) bits=([0-9a-fA-F]+)")
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: render_framedump.py output.png < sim_output.log", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print("usage: render_framedump.py output.png [height] < sim_output.log", file=sys.stderr)
         sys.exit(1)
     out_path = sys.argv[1]
+    explicit_height = int(sys.argv[2]) if len(sys.argv) == 3 else None
 
     rows = {}
     for line in sys.stdin:
@@ -45,6 +51,8 @@ def main():
         # degenerate (reset-clobbered) reading always has fewer.
         if row not in rows or bin(bits).count("1") > bin(rows[row]).count("1"):
             rows[row] = bits
+
+    HEIGHT = explicit_height or max(DEFAULT_HEIGHT, (max(rows) + 1) if rows else DEFAULT_HEIGHT)
 
     missing = [r for r in range(HEIGHT) if r not in rows]
     if missing:
