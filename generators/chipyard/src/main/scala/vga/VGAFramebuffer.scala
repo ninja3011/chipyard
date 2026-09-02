@@ -1,21 +1,29 @@
-// Minimal monochrome VGA output peripheral, first target: Arty A7-100T
-// bring-up (DOOM + Bad Apple video). Lives here (generators/chipyard),
-// not under fpga/, for the same reason chipyard.example.GCD does:
-// fpga/ depends on generators/chipyard, not the other way around, so any
-// type DigitalTop.scala mixes in must live on this side of that boundary.
-// Board-specific pin binding (which physical pins HSYNC/VSYNC/VIDEO land
-// on) belongs in fpga/src/main/scala/arty100t/ instead, as a HarnessBinder.
+// VGA output peripheral, real 12-bit color (4 bits each R/G/B, 4096
+// colors) -- matches the real Digilent Pmod VGA module the physical
+// hardware for this project actually uses. Lives here
+// (generators/chipyard), not under fpga/, for the same reason
+// chipyard.example.GCD does: fpga/ depends on generators/chipyard, not
+// the other way around, so any type DigitalTop.scala mixes in must live
+// on this side of that boundary. Board-specific pin binding (which
+// physical pins R/G/B/HSYNC/VSYNC land on) belongs in
+// fpga/src/main/scala/arty100t/ instead, as a HarnessBinder.
 //
-// Design choices, all deliberate tradeoffs to keep first-bring-up risk low:
-//   - Monochrome (1 bit/pixel), matching what Bad Apple's existing .vidf
-//     pipeline already produces natively, and what DOOM's framebuffer can
-//     be thresholded down to in software.
+// Was originally monochrome (1 bit/pixel, 9600-byte framebuffer, 3
+// output signals) for first-bring-up risk reduction -- upgraded to real
+// color once the monochrome path was fully verified (functional
+// integration test, CPU regression, real-data Bad Apple/DOOM
+// testbenches, real bitstream) and the real Pmod VGA hardware was
+// confirmed as what actually ships. Pixel format: 16-bit word per pixel,
+// bits [11:8]=R[3:0], [7:4]=G[3:0], [3:0]=B[3:0] (top 4 bits unused),
+// packed little-endian (low byte = {G,B}, high byte = {0000,R}) --
+// framebuffer grows from 9,600 bytes to 153,600 bytes (320x240x2), still
+// comfortably inside the Arty A7-100T's real BRAM budget.
+//
+// Design choices carried over unchanged from the monochrome version:
 //   - Framebuffer scanned out at real 640x480@~60Hz VGA timing via 2x
 //     pixel-doubling from a 320x240 source. Pixel clock is a toggle
 //     flip-flop off the existing 50MHz harness clock (no new PLL domain,
 //     no new CDC risk).
-//   - Only 3 signals out (HSYNC, VSYNC, one monochrome VIDEO bit) -- works
-//     with any simple VGA breakout, not a specific 12-pin color Pmod.
 //   - TL slave logic is NOT built on TLRegisterNode+regmap: regmap's
 //     automatic DTS "reg" resource binding hit a real, reproducible
 //     failure once this has more than a couple of individually-mapped
@@ -53,21 +61,16 @@ case object VGAFramebufferKey extends Field[Option[VGAFramebufferParams]](None)
 class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p: Parameters) extends ClockSinkDomain(ClockSinkParameters())(p) {
   val fbWidth = 320
   val fbHeight = 240
-  val fbBytes = (fbWidth * fbHeight) / 8 // 1 bit/pixel = 9600 bytes
+  val fbBytes = fbWidth * fbHeight * 2 // 16 bits/pixel (12 real color bits) = 153,600 bytes
   // AddressSet's mask must be a contiguous run of low-order 1 bits
   // (base-2 power minus one) to decode a single contiguous range --
-  // 9600 isn't a power of two, so `fbBytes - 1` (0x257f) is NOT
-  // contiguous (0b10010101111111) and was silently accepted as a valid
-  // but wrong AddressSet: a *sparse*, checkered decode (real chunks only
-  // at 0x0-0x7f, 0x100-0x17f, 0x400-0x47f, ...; addresses like 0x80 or
-  // 0x200 simply don't decode to this device at all). Caught by the new
-  // full-SoC integration test hitting real addresses across the whole
-  // framebuffer range -- the earlier isolated unit test only ever wrote
-  // to address 0x0, which happens to land inside a valid chunk, so it
-  // never exercised this. Fixed by rounding the address region up to the
-  // next power of two (16384 bytes here) -- the Mem itself still only
-  // needs to be big enough to back that decode width; addresses beyond
-  // the real 9600-byte image simply hold unused storage.
+  // 153600 isn't a power of two either, hitting the exact same class of
+  // bug the earlier 1bpp framebuffer's address decode had (see the real
+  // bug found via the full-SoC integration test, documented in
+  // ARTY-VGA-DOOM-FUNCVERIF-OVERNIGHT-PLAN.md): a non-power-of-two mask
+  // silently decodes as a sparse, checkered set of small chunks instead
+  // of one contiguous region. Rounding up to the next power of two here
+  // from the start avoids re-triggering it.
   val addressSetBytes = { var n = 1; while (n < fbBytes) n = n << 1; n }
   val addressSet = AddressSet(params.address, addressSetBytes - 1)
 
@@ -89,7 +92,9 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
    val io = IO(new Bundle {
      val vga_hsync = Output(Bool())
      val vga_vsync = Output(Bool())
-     val vga_video = Output(Bool())
+     val vga_r = Output(UInt(4.W))
+     val vga_g = Output(UInt(4.W))
+     val vga_b = Output(UInt(4.W))
    })
    withClockAndReset(clock, reset) {
     def bigBits(x: BigInt, tail: List[Boolean] = List.empty[Boolean]): List[Boolean] =
@@ -152,26 +157,39 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
     val fbX = hCount >> 1
     val fbY = vCount >> 1
     val pixelIndex = fbY * fbWidth.U + fbX
-    val byteIndex = pixelIndex >> 3
-    val bitIndex = pixelIndex(2, 0)
-    val byteInBeat = byteIndex(log2Ceil(beatBytes) - 1, 0)
+    // 16 bits (2 bytes) per pixel now, not 1 bit -- byteIndex is simply
+    // pixelIndex*2. Since 2 always divides evenly into a 4-byte beat, a
+    // pixel's two bytes never straddle a beat boundary: byteInBeat0 is
+    // always even (0 or 2 for beatBytes=4), so byteInBeat0+1 stays inside
+    // the same beat.
+    val byteIndex = pixelIndex << 1
+    val byteInBeat0 = byteIndex(log2Ceil(beatBytes) - 1, 0)
     val beatIndex = byteIndex >> log2Ceil(beatBytes)
 
-    // MSB-first per byte (bit 7 = first pixel in that byte), matching the
-    // existing .vidf format (software/video/video2frames.py's pack_1bit)
-    // and this project's DOOM framebuffer writer -- one shared convention,
-    // no bit-reversal needed anywhere in software.
-    val vgaByte = mem(beatIndex)(byteInBeat)
-    val pixelBit = (vgaByte >> (7.U - bitIndex))(0)
+    // Little-endian pixel word: low byte (byteInBeat0) = {G[3:0],B[3:0]},
+    // high byte (byteInBeat0+1) = {4'b0, R[3:0]} -- matches the software
+    // packing convention (pixel16 = (R<<8)|(G<<4)|B) exactly, no
+    // reversal needed anywhere.
+    val loByte = mem(beatIndex)(byteInBeat0)
+    val hiByte = mem(beatIndex)(byteInBeat0 + 1.U)
+    val pixelR = hiByte(3, 0)
+    val pixelG = loByte(7, 4)
+    val pixelB = loByte(3, 0)
 
     val hsync_d = RegNext(hsync)
     val vsync_d = RegNext(vsync)
     val visible_d = RegNext(visible)
-    val pixelBit_d = RegNext(pixelBit) // register to match combinational-Mem read timing
+    // Register to match combinational-Mem read timing (same pattern as
+    // the earlier 1bpp version's pixelBit_d).
+    val pixelR_d = RegNext(pixelR)
+    val pixelG_d = RegNext(pixelG)
+    val pixelB_d = RegNext(pixelB)
 
     io.vga_hsync := hsync_d
     io.vga_vsync := vsync_d
-    io.vga_video := visible_d && pixelBit_d
+    io.vga_r := Mux(visible_d, pixelR_d, 0.U)
+    io.vga_g := Mux(visible_d, pixelG_d, 0.U)
+    io.vga_b := Mux(visible_d, pixelB_d, 0.U)
    }
   }
 }
@@ -179,7 +197,9 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
 class VGAFramebufferOutputBundle extends Bundle {
   val hsync = Output(Bool())
   val vsync = Output(Bool())
-  val video = Output(Bool())
+  val r = Output(UInt(4.W))
+  val g = Output(UInt(4.W))
+  val b = Output(UInt(4.W))
 }
 
 // Back to InModuleBody (matching chipyard.example.GCD exactly) now that
@@ -227,7 +247,9 @@ trait CanHavePeripheryVGAFramebuffer { this: BaseSubsystem =>
       val io = IO(new VGAFramebufferOutputBundle).suggestName("vga_periph")
       io.hsync := vga.module.io.vga_hsync
       io.vsync := vga.module.io.vga_vsync
-      io.video := vga.module.io.vga_video
+      io.r := vga.module.io.vga_r
+      io.g := vga.module.io.vga_g
+      io.b := vga.module.io.vga_b
       io
     }
   }

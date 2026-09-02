@@ -14,7 +14,9 @@ class WithVGAFramebufferIOPunchthrough extends OverrideIOBinder({
       val io_vga = IO(new VGAFramebufferOutputBundle).suggestName("vga")
       io_vga.hsync := vga.hsync
       io_vga.vsync := vga.vsync
-      io_vga.video := vga.video
+      io_vga.r := vga.r
+      io_vga.g := vga.g
+      io_vga.b := vga.b
       VGAFramebufferPort(() => io_vga)
     }.toSeq
     (vgaPort, Nil)
