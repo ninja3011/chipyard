@@ -13,7 +13,7 @@
 # one found -- check the printed target list if that's wrong for your
 # setup (e.g. multiple boards/programmers attached at once).
 
-set bit_file "C:/arty100t-build/chipyard/fpga/generated-src/chipyard.fpga.arty100t.Arty100THarness.RocketArty100TConfig/obj/Arty100THarness.bit"
+set bit_file "C:/arty100t-build/chipyard/fpga/generated-src/chipyard.fpga.arty100t.Arty100THarness.RocketArty100TVGAConfig/obj/Arty100THarness.bit"
 
 open_hw_manager
 connect_hw_server
