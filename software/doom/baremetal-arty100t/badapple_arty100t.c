@@ -3,11 +3,14 @@
 // the newlib/nano.specs runtime) rather than anything network-based --
 // there's no network here, unlike the earlier Linux netstream version.
 //
-// The .vidf format (software/video/video2frames.py) is already 320x200,
-// 1 bit/pixel, packed MSB-first row-major -- almost a direct match for
-// the VGA peripheral's native 320x240 1bpp framebuffer. Unlike DOOM's
-// path, no thresholding or downsampling is needed, just the same 20-row
-// vertical letterbox centering.
+// The .vidf format (software/video/video2frames.py) is 320x200, 1 bit/
+// pixel, packed MSB-first row-major. The VGA peripheral is real 8-bit
+// color (3-3-2 RGB, see VGAFramebuffer.scala's header comment for why),
+// so each source bit is expanded on the fly: on -> full white
+// (R=7,G=7,B=3, the actual max value each field can hold), off -> full
+// black -- keeps Bad Apple's real black and white identity while
+// exercising the real color write path end to end. Same 20-row vertical
+// letterbox centering as before.
 
 #include <stdint.h>
 #include "uart.h"
@@ -15,8 +18,12 @@
 #define FRAMEBUFFER_BASE 0x04000000UL
 #define FB_WIDTH 320
 #define FB_HEIGHT 240
-#define FB_BYTES_PER_ROW (FB_WIDTH / 8)
+#define FB_BYTES_PER_PIXEL 1
+#define FB_BYTES_PER_ROW (FB_WIDTH * FB_BYTES_PER_PIXEL)
 #define ROW_OFFSET_Y ((FB_HEIGHT - 200) / 2) /* 20-row letterbox, matches DOOM's path */
+
+#define PIXEL_WHITE 0xFFU /* R=7,G=7,B=3 -> (7<<5)|(7<<2)|3 = 0xFF, the real per-field max */
+#define PIXEL_BLACK 0x00U
 
 extern char video_vidf_start[];
 extern char video_vidf_end[];
@@ -58,6 +65,7 @@ int main(void) {
   uart_puts("[badapple] loaded, playing\r\n");
 
   const uint8_t *frameData = (const uint8_t *)video_vidf_start + sizeof(VidfHeader);
+  uint32_t srcBytesPerRow = hdr->width / 8;
   uint32_t frameBytes = (hdr->width * hdr->height) / 8;
   uint32_t frameIntervalMs = 1000 / hdr->fps;
 
@@ -66,16 +74,16 @@ int main(void) {
   while (1) {
     const uint8_t *frame = frameData;
     for (uint32_t f = 0; f < hdr->numFrames; f++) {
-      // The .vidf frame is already exactly hdr->width x hdr->height (320x200),
-      // packed MSB-first per row (hdr->width/8 = 40 bytes/row) -- now that
-      // the framebuffer is a plain byte-addressable memory using the same
-      // MSB-first convention, this is a direct row-by-row copy, no
-      // re-packing needed at all.
+      // Expand each packed 1bpp source pixel into a real 8-bit color
+      // pixel (white or black) -- same encoding DOOM's path writes and
+      // VGAFramebuffer.scala reads.
       for (uint32_t y = 0; y < hdr->height; y++) {
         uint32_t fbY = y + ROW_OFFSET_Y;
-        const uint8_t *rowBytes = frame + y * (hdr->width / 8);
-        for (int b = 0; b < FB_BYTES_PER_ROW; b++) {
-          fb[fbY * FB_BYTES_PER_ROW + b] = rowBytes[b];
+        const uint8_t *rowBytes = frame + y * srcBytesPerRow;
+        for (uint32_t x = 0; x < hdr->width; x++) {
+          uint8_t srcByte = rowBytes[x / 8];
+          int on = (srcByte >> (7 - (x % 8))) & 1;
+          fb[fbY * FB_BYTES_PER_ROW + x * FB_BYTES_PER_PIXEL] = on ? PIXEL_WHITE : PIXEL_BLACK;
         }
       }
       frame += frameBytes;

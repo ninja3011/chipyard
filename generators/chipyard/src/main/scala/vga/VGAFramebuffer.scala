@@ -1,40 +1,62 @@
-// VGA output peripheral, real 12-bit color (4 bits each R/G/B, 4096
-// colors) -- matches the real Digilent Pmod VGA module the physical
-// hardware for this project actually uses. Lives here
-// (generators/chipyard), not under fpga/, for the same reason
-// chipyard.example.GCD does: fpga/ depends on generators/chipyard, not
-// the other way around, so any type DigitalTop.scala mixes in must live
-// on this side of that boundary. Board-specific pin binding (which
-// physical pins R/G/B/HSYNC/VSYNC land on) belongs in
-// fpga/src/main/scala/arty100t/ instead, as a HarnessBinder.
+// VGA output peripheral, real 8-bit color (3-3-2 RGB: R[2:0], G[2:0],
+// B[1:0], 256 colors) -- matches the real Digilent Pmod VGA module the
+// physical hardware for this project actually uses, widened up to that
+// module's real 4-bit-per-channel DAC inputs on read-out (see
+// widen3to4/widen2to4 below). Lives here (generators/chipyard), not
+// under fpga/, for the same reason chipyard.example.GCD does: fpga/
+// depends on generators/chipyard, not the other way around, so any type
+// DigitalTop.scala mixes in must live on this side of that boundary.
+// Board-specific pin binding (which physical pins R/G/B/HSYNC/VSYNC land
+// on) belongs in fpga/src/main/scala/arty100t/ instead, as a
+// HarnessBinder.
 //
-// Was originally monochrome (1 bit/pixel, 9600-byte framebuffer, 3
-// output signals) for first-bring-up risk reduction -- upgraded to real
-// color once the monochrome path was fully verified (functional
-// integration test, CPU regression, real-data Bad Apple/DOOM
-// testbenches, real bitstream) and the real Pmod VGA hardware was
-// confirmed as what actually ships. Pixel format: 16-bit word per pixel,
-// bits [11:8]=R[3:0], [7:4]=G[3:0], [3:0]=B[3:0] (top 4 bits unused),
-// packed little-endian (low byte = {G,B}, high byte = {0000,R}) --
-// framebuffer grows from 9,600 bytes to 153,600 bytes (320x240x2), still
-// comfortably inside the Arty A7-100T's real BRAM budget.
+// Was originally monochrome (1 bit/pixel, 9,600-byte framebuffer, 3
+// output signals) for first-bring-up risk reduction, then briefly a real
+// 16-bit/pixel (4 bits/channel, 4,096-color) design -- that 16-bit
+// version hit a real, structural Arty A7-100T resource ceiling (see
+// below) and was replaced with this 8-bit/pixel version.
 //
-// Design choices carried over unchanged from the monochrome version:
-//   - Framebuffer scanned out at real 640x480@~60Hz VGA timing via 2x
-//     pixel-doubling from a 320x240 source. Pixel clock is a toggle
-//     flip-flop off the existing 50MHz harness clock (no new PLL domain,
-//     no new CDC risk).
-//   - TL slave logic is NOT built on TLRegisterNode+regmap: regmap's
-//     automatic DTS "reg" resource binding hit a real, reproducible
-//     failure once this has more than a couple of individually-mapped
-//     fields ("must be a single range" -- regmap is built for a handful
-//     of control registers, not a multi-KB bulk memory addressed one
-//     word at a time). Instead this copies the real TL A/D-channel
-//     handling straight from rocket-chip's own
-//     devices/tilelink/TestRAM.scala (TLTestRAM) -- a proven, trusted
-//     TileLink-to-Mem bridge using MemoryDevice for correct DTS binding
-//     with no regmap involved -- and adds a second, VGA-only read port
-//     onto the same underlying Mem.
+// REAL HISTORY of why this is 8 bits/pixel with two duplicated memories,
+// not the simpler single-memory design tried first:
+//   1. The very first synthesizable version reused rocket-chip's own
+//      devices/tilelink/TestRAM.scala (TLTestRAM) pattern verbatim --
+//      including its combinational-read Mem, despite that file's own
+//      header saying outright "Do not use this for synthesis! Only for
+//      simulation." That worked by accident at the old 9,600-byte 1bpp
+//      size (small enough to fit as LUTs even though a combinational-read
+//      Mem can never map to real Xilinx Block RAM, which requires a
+//      synchronous read). At 153,600 bytes (the first real-color attempt,
+//      16 bits/pixel) it required ~19,200 LUT-as-Distributed-RAM sites --
+//      right at the Arty A7-100T's entire 19,000-site budget -- and
+//      Vivado's placer failed outright (DRC UTLZ-1, confirmed via a real
+//      synthesis run).
+//   2. Fixed by switching to SyncReadMem (real BRAM-inferable) with a
+//      pipelined 1-cycle TL response -- confirmed correct in simulation
+//      (the color testbench re-passed, 25,600 real pixels), but the
+//      *next* real Vivado run failed even harder (89,124 LUT-as-Memory
+//      needed, worse than before). Root cause: this memory needs THREE
+//      independent ports -- one write (TL) and two reads (TL response,
+//      VGA scan-out) -- and real Xilinx Block RAM only has two ports
+//      total. Chipyard's macro-compiler can map a clean 1-write+1-read
+//      memory onto real BRAM (that's why the CPU's own cache arrays,
+//      which are exactly that shape, always synthesized fine) but has no
+//      BRAM template for a 3-port request, so it silently fell back to
+//      flip-flops + mux logic instead -- confirmed via two consecutive
+//      real synthesis failures, not assumed.
+//   3. Real fix: duplicate the storage into two separate 2-port
+//      SyncReadMems (memTL, memVGA), mirroring every write into both --
+//      each one is then a clean 1-write+1-read shape a real BRAM can
+//      hold. At 16 bits/pixel this duplication alone would have used
+//      roughly 85% of the entire chip's Block RAM just for video,
+//      leaving too little for the CPU's caches -- so pixel depth was
+//      dropped to 8 bits/pixel (3-3-2 RGB) at the same time, which
+//      brings the duplicated framebuffer down to a comfortable share of
+//      the real ~4,860Kb device BRAM budget alongside everything else.
+//      The real Pmod VGA hardware's DAC inputs are unchanged at 4 bits
+//      per channel -- only the *stored* precision drops; widen3to4/
+//      widen2to4 spread the stored 3-/2-bit values back out to the full
+//      0-15 DAC range on read-out (bit replication, not literal padding
+//      with zeros, so white still reads as true white on real hardware).
 
 package chipyard.vga
 
@@ -61,7 +83,7 @@ case object VGAFramebufferKey extends Field[Option[VGAFramebufferParams]](None)
 class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p: Parameters) extends ClockSinkDomain(ClockSinkParameters())(p) {
   val fbWidth = 320
   val fbHeight = 240
-  val fbBytes = fbWidth * fbHeight * 2 // 16 bits/pixel (12 real color bits) = 153,600 bytes
+  val fbBytes = fbWidth * fbHeight // 8 bits/pixel (3-3-2 RGB) = 76,800 bytes
   // AddressSet's mask must be a contiguous run of low-order 1 bits
   // (base-2 power minus one) to decode a single contiguous range --
   // 153600 isn't a power of two either, hitting the exact same class of
@@ -92,9 +114,19 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
    val io = IO(new Bundle {
      val vga_hsync = Output(Bool())
      val vga_vsync = Output(Bool())
-     val vga_r = Output(UInt(4.W))
-     val vga_g = Output(UInt(4.W))
-     val vga_b = Output(UInt(4.W))
+     // Vec(4, Bool()) here, not UInt(4.W) -- each bit needs to be a real,
+     // independent top-level IO leaf so WithArty100TVGA's
+     // IOPin(harnessIO.r(0)) etc. actually bind a physical pin constraint
+     // to it. A plain UInt(4.W) port's r(0) is a bit-select expression
+     // derived from one shared wire, not a genuine separate IO leaf --
+     // confirmed as the real cause of a real bug tonight: Vivado's DRC
+     // reported all 12 vga_r/g/b pins missing IOSTANDARD/LOC constraints
+     // (while vga_hsync/vga_vsync, already plain Bool ports, got theirs
+     // fine), because IOPin's package-pin/IOSTANDARD properties never
+     // actually attached to those bit-select expressions.
+     val vga_r = Output(Vec(4, Bool()))
+     val vga_g = Output(Vec(4, Bool()))
+     val vga_b = Output(Vec(4, Bool()))
    })
    withClockAndReset(clock, reset) {
     def bigBits(x: BigInt, tail: List[Boolean] = List.empty[Boolean]): List[Boolean] =
@@ -105,24 +137,50 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
 
     val addrBits = (mask zip edge.addr_hi(in.a.bits).asBools).filter(_._1).map(_._2)
     val memAddress = Cat(addrBits.reverse)
-    // Same combinational-read Mem TLTestRAM uses for the TL side -- proven
-    // protocol timing, copied verbatim in spirit. The VGA scanner below
-    // gets its own read port on this same Mem (Chisel supports multiple
-    // read ports on one Mem; Vivado infers the BRAM/LUTRAM accordingly).
-    val mem = Mem(1 << addrBits.size, Vec(beatBytes, Bits(8.W)))
+    // Two separate, real Block-RAM-inferable memories holding identical
+    // content (every write mirrored into both) instead of one shared
+    // 3-port memory -- see header comment for why: real Xilinx BRAM only
+    // has two ports, and a naive single-memory design needing 1 write +
+    // 2 independent reads (TL response, VGA scan-out) has no BRAM
+    // template to fall back to. Each of these is a clean 1-write+1-read
+    // shape instead.
+    val memTL = SyncReadMem(1 << addrBits.size, Vec(beatBytes, Bits(8.W)))
+    val memVGA = SyncReadMem(1 << addrBits.size, Vec(beatBytes, Bits(8.W)))
 
-    in.a.ready := in.d.ready
-    in.d.valid := in.a.valid
+    // A synchronous-read Mem can't answer in the same cycle a request is
+    // accepted the way TLTestRAM's combinational version does, so this is
+    // a real (if minimal) 1-deep pipeline: accept at most one request at
+    // a time, hold it until its answer (already latched by the SyncReadMem
+    // read below) is delivered on in.d the following cycle.
+    val reqValid = RegInit(false.B)
+    val reqBits = Reg(chiselTypeOf(in.a.bits))
+    val reqHasData = Reg(Bool())
+
+    in.a.ready := !reqValid || in.d.ready
+    when (in.a.fire) {
+      reqValid := true.B
+      reqBits := in.a.bits
+      reqHasData := edge.hasData(in.a.bits)
+    } .elsewhen (in.d.fire) {
+      reqValid := false.B
+    }
+    in.d.valid := reqValid
 
     val hasData = edge.hasData(in.a.bits)
     val wdata = VecInit(Seq.tabulate(beatBytes) {i => in.a.bits.data(8*(i+1)-1, 8*i)})
+    // Issued using this cycle's incoming request (valid when in.a.fire),
+    // landing in the SyncReadMem's internal read register on the same
+    // clock edge that latches reqValid/reqBits above -- so rdata lines up
+    // with reqBits on the very next cycle, exactly when in.d is asserted.
+    val rdata = memTL.read(memAddress, in.a.fire)
 
-    in.d.bits := edge.AccessAck(in.a.bits)
-    in.d.bits.data := Cat(mem(memAddress).reverse)
+    in.d.bits := edge.AccessAck(reqBits)
+    in.d.bits.data := Cat(rdata.reverse)
     in.d.bits.corrupt := false.B
-    in.d.bits.opcode := Mux(hasData, TLMessages.AccessAck, TLMessages.AccessAckData)
+    in.d.bits.opcode := Mux(reqHasData, TLMessages.AccessAck, TLMessages.AccessAckData)
     when (in.a.fire && hasData) {
-      mem.write(memAddress, wdata, in.a.bits.mask.asBools)
+      memTL.write(memAddress, wdata, in.a.bits.mask.asBools)
+      memVGA.write(memAddress, wdata, in.a.bits.mask.asBools)
     }
 
     in.b.valid := false.B
@@ -157,39 +215,45 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
     val fbX = hCount >> 1
     val fbY = vCount >> 1
     val pixelIndex = fbY * fbWidth.U + fbX
-    // 16 bits (2 bytes) per pixel now, not 1 bit -- byteIndex is simply
-    // pixelIndex*2. Since 2 always divides evenly into a 4-byte beat, a
-    // pixel's two bytes never straddle a beat boundary: byteInBeat0 is
-    // always even (0 or 2 for beatBytes=4), so byteInBeat0+1 stays inside
-    // the same beat.
-    val byteIndex = pixelIndex << 1
+    // 1 byte per pixel now (3-3-2 RGB) -- byteIndex is simply pixelIndex,
+    // no more multi-byte-per-pixel/beat-straddling math needed.
+    val byteIndex = pixelIndex
     val byteInBeat0 = byteIndex(log2Ceil(beatBytes) - 1, 0)
     val beatIndex = byteIndex >> log2Ceil(beatBytes)
 
-    // Little-endian pixel word: low byte (byteInBeat0) = {G[3:0],B[3:0]},
-    // high byte (byteInBeat0+1) = {4'b0, R[3:0]} -- matches the software
-    // packing convention (pixel16 = (R<<8)|(G<<4)|B) exactly, no
-    // reversal needed anywhere.
-    val loByte = mem(beatIndex)(byteInBeat0)
-    val hiByte = mem(beatIndex)(byteInBeat0 + 1.U)
-    val pixelR = hiByte(3, 0)
-    val pixelG = loByte(7, 4)
-    val pixelB = loByte(3, 0)
+    // Widen a stored 3-bit or 2-bit channel value back out to the real
+    // Pmod VGA hardware's actual 4-bit DAC input range via bit
+    // replication (not zero-padding) so the stored maximum (e.g. 3'b111)
+    // still reads as the DAC's true maximum (4'b1111), not a dim
+    // 4'b1110 -- e.g. 3-bit abc -> abca, 2-bit ab -> abab.
+    def widen3to4(x: UInt): UInt = Cat(x, x(2))
+    def widen2to4(x: UInt): UInt = Cat(x, x)
+
+    // Independent SyncReadMem read port for the scanner (its own
+    // duplicated memory, memVGA -- see header comment), always enabled
+    // (every pixelTick issues a real read). Single-byte 3-3-2 pixel:
+    // bits [7:5]=R[2:0], [4:2]=G[2:0], [1:0]=B[1:0] -- matches the
+    // software packing convention (pixel8 = (R3<<5)|(G3<<2)|B2) exactly.
+    // mem.read's own internal register is what supplies the 1-cycle delay
+    // (SyncReadMem read latency) that pixelR/G/B need to line up with
+    // hsync_d/vsync_d/visible_d below -- no separate RegNext needed on
+    // the pixel values themselves (adding one would double the delay and
+    // misalign it).
+    val scanRdata = memVGA.read(beatIndex, true.B)
+    val pixelByte = scanRdata(byteInBeat0)
+    val pixelR = widen3to4(pixelByte(7, 5))
+    val pixelG = widen3to4(pixelByte(4, 2))
+    val pixelB = widen2to4(pixelByte(1, 0))
 
     val hsync_d = RegNext(hsync)
     val vsync_d = RegNext(vsync)
     val visible_d = RegNext(visible)
-    // Register to match combinational-Mem read timing (same pattern as
-    // the earlier 1bpp version's pixelBit_d).
-    val pixelR_d = RegNext(pixelR)
-    val pixelG_d = RegNext(pixelG)
-    val pixelB_d = RegNext(pixelB)
 
     io.vga_hsync := hsync_d
     io.vga_vsync := vsync_d
-    io.vga_r := Mux(visible_d, pixelR_d, 0.U)
-    io.vga_g := Mux(visible_d, pixelG_d, 0.U)
-    io.vga_b := Mux(visible_d, pixelB_d, 0.U)
+    io.vga_r := VecInit(Mux(visible_d, pixelR, 0.U).asBools)
+    io.vga_g := VecInit(Mux(visible_d, pixelG, 0.U).asBools)
+    io.vga_b := VecInit(Mux(visible_d, pixelB, 0.U).asBools)
    }
   }
 }
@@ -197,9 +261,12 @@ class TLVGAFramebuffer(params: VGAFramebufferParams, beatBytes: Int)(implicit p:
 class VGAFramebufferOutputBundle extends Bundle {
   val hsync = Output(Bool())
   val vsync = Output(Bool())
-  val r = Output(UInt(4.W))
-  val g = Output(UInt(4.W))
-  val b = Output(UInt(4.W))
+  // Vec(4, Bool()), not UInt(4.W) -- see TLVGAFramebuffer's io comment
+  // for why: each bit must be a genuine, separate IO leaf for
+  // WithArty100TVGA's per-bit IOPin() pin binding to actually work.
+  val r = Output(Vec(4, Bool()))
+  val g = Output(Vec(4, Bool()))
+  val b = Output(Vec(4, Bool()))
 }
 
 // Back to InModuleBody (matching chipyard.example.GCD exactly) now that

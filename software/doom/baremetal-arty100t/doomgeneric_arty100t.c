@@ -1,13 +1,19 @@
 // doomgeneric backend for bare-metal RocketArty100TConfig.
 //
-// Video: DG_DrawFrame downsamples+thresholds DG_ScreenBuffer (640x400 RGBA,
-// doomgeneric's default resolution) into the real monochrome VGA
-// framebuffer added by chipyard.vga.TLVGAFramebuffer (RocketArty100TVGAConfig
-// only -- the plain RocketArty100TConfig build has no such peripheral and
-// must not be linked against this build variant). The peripheral is
-// 320x240, 1 bit/pixel, packed 32 pixels/word; DOOM's 640x400 is nearest-
-// neighbor downsampled 2x to 320x200 and vertically centered (20-row
-// letterbox top and bottom) rather than stretched, to avoid distortion.
+// Video: DG_DrawFrame downsamples DG_ScreenBuffer (640x400 BGRA,
+// doomgeneric's default resolution) into the real 8-bit color (3-3-2 RGB)
+// VGA framebuffer added by chipyard.vga.TLVGAFramebuffer
+// (RocketArty100TVGAConfig only -- the plain RocketArty100TConfig build
+// has no such peripheral and must not be linked against this build
+// variant). The peripheral is 320x240, 1 byte/pixel, bits
+// [7:5]=R[2:0],[4:2]=G[2:0],[1:0]=B[1:0] (see VGAFramebuffer.scala's
+// header comment for why this is 8 bits/pixel and not the 16-bit design
+// tried first -- a real Arty A7-100T Block RAM budget constraint, not a
+// software choice); DOOM's 640x400 is nearest-neighbor downsampled 2x to
+// 320x200 and vertically centered (20-row letterbox top and bottom)
+// rather than stretched, to avoid distortion. Each source pixel's 8-bit
+// B/G/R channels are downsampled to 3/3/2 bits by taking the top bits --
+// no thresholding, this is real (if lower-precision) color.
 //
 // Input: DG_GetKey polls the same UART console already wired up in
 // RocketArty100TConfig (confirmed: serial@0x10020000, sifive,uart0, 50MHz
@@ -31,17 +37,21 @@
 #define FRAMEBUFFER_BASE 0x04000000UL
 #define FB_WIDTH 320
 #define FB_HEIGHT 240
-#define FB_BYTES_PER_ROW (FB_WIDTH / 8)
+#define FB_BYTES_PER_PIXEL 1
+#define FB_BYTES_PER_ROW (FB_WIDTH * FB_BYTES_PER_PIXEL)
 #define FB_ROW_OFFSET_Y ((FB_HEIGHT - DOOMGENERIC_RESY / 2) / 2) /* letterbox */
 
-static inline int sampleThreshold(int srcX, int srcY) {
-  // DG_ScreenBuffer is BGRA (doomgeneric's convention on every backend in
-  // this project so far); channel 0 (B) carries the on/off signal for our
-  // thresholded monochrome output, matching the netstream/video pipeline's
-  // existing convention.
+// Real 3-3-2-bit-per-channel color sample, no thresholding. DG_ScreenBuffer
+// is BGRA (doomgeneric's convention on every backend in this project so
+// far): byte 0 = B, byte 1 = G, byte 2 = R. Downsample each 8-bit channel
+// by keeping its top 3 (R,G) or 2 (B) bits, packed [7:5]=R,[4:2]=G,[1:0]=B
+// -- matches VGAFramebuffer.scala's read-side extraction exactly.
+static inline uint8_t samplePixelColor(int srcX, int srcY) {
   uint32_t px = DG_ScreenBuffer[srcY * DOOMGENERIC_RESX + srcX];
-  uint8_t b = (uint8_t)(px & 0xFF);
-  return b >= 128;
+  uint8_t b2 = (uint8_t)((px >> 6) & 0x3);
+  uint8_t g3 = (uint8_t)((px >> 13) & 0x7);
+  uint8_t r3 = (uint8_t)((px >> 21) & 0x7);
+  return (uint8_t)((r3 << 5) | (g3 << 2) | b2);
 }
 
 // mtime tick rate: confirmed (not assumed) from this exact config's own
@@ -102,26 +112,20 @@ void DG_Init(void) {
 }
 
 void DG_DrawFrame(void) {
-  // Plain packed-byte memory now (TLManagerNode over a byte-addressable
-  // Mem, not the earlier per-word regmap scheme) -- MSB-first per byte,
-  // matching the .vidf format's own convention (video2frames.py's
-  // pack_1bit), so both DOOM and Bad Apple agree with the VGA hardware's
-  // bit ordering without any reversal anywhere.
+  // 1-byte-per-pixel color memory, [7:5]=R[2:0],[4:2]=G[2:0],[1:0]=B[1:0]
+  // -- matches VGAFramebuffer.scala's read-side extraction exactly, same
+  // encoding the real captured-frame verification testbench was checked
+  // against.
   volatile uint8_t *fb = (volatile uint8_t *)FRAMEBUFFER_BASE;
 
   for (int y = 0; y < FB_HEIGHT; y++) {
     int srcY2 = y - FB_ROW_OFFSET_Y; // row within the centered 200-row image
-    for (int xByte = 0; xByte < FB_BYTES_PER_ROW; xByte++) {
-      uint8_t byteVal = 0;
-      for (int bit = 0; bit < 8; bit++) {
-        int x = xByte * 8 + bit;
-        int on = 0;
-        if (srcY2 >= 0 && srcY2 < DOOMGENERIC_RESY / 2) {
-          on = sampleThreshold(x * 2, srcY2 * 2);
-        }
-        byteVal |= (on ? 1u : 0u) << (7 - bit); // MSB-first
+    for (int x = 0; x < FB_WIDTH; x++) {
+      uint8_t pixel = 0;
+      if (srcY2 >= 0 && srcY2 < DOOMGENERIC_RESY / 2) {
+        pixel = samplePixelColor(x * 2, srcY2 * 2);
       }
-      fb[y * FB_BYTES_PER_ROW + xByte] = byteVal;
+      fb[y * FB_BYTES_PER_ROW + x * FB_BYTES_PER_PIXEL] = pixel;
     }
   }
 }

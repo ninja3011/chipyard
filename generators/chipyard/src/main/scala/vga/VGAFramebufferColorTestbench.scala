@@ -1,21 +1,28 @@
-// Real-data testbench for TLVGAFramebuffer's real 12-bit color path
-// (4 bits each R/G/B). Supersedes the earlier monochrome-era testbenches
+// Real-data testbench for TLVGAFramebuffer's real 8-bit color path
+// (3-3-2 RGB). Supersedes the earlier monochrome-era testbenches
 // (VGAFramebufferTestbench, VGAFramebufferEnhancedTestbench,
 // VGAFramebufferBadAppleTestbench, VGAFramebufferDoomTestbench -- all
 // removed, since they tested an interface (a single 1-bit vga_video
 // output) that no longer exists now that the peripheral has real color).
 //
-// Reuses the two real gameplay frames already captured live from an
+// Reuses the same real gameplay frame already captured live from an
 // actual doomgeneric + freedoom1.wad session (see
-// VGAFramebufferDoomGameplayTestbench.scala's original capture) --
-// reprocessed here into real 4-bit-per-channel color (not thresholded
-// to black/white) via a straight 8-bit -> 4-bit downsample of the real
-// captured R/G/B values, packed as 16-bit words (bits [11:8]=R, [7:4]=G,
-// [3:0]=B) matching TLVGAFramebuffer's real pixel format exactly.
+// VGAFramebufferDoomGameplayTestbench.scala's original capture) and
+// already reprocessed once into real 4-bit-per-channel color -- this
+// testbench requantizes that same real data down one more step to real
+// 3-3-2 (still real captured pixel values, just lower precision), matching
+// TLVGAFramebuffer's current pixel format exactly. See
+// VGAFramebuffer.scala's header comment for the full real history of why
+// the peripheral moved from 16 bits/pixel to 8: a real Arty A7-100T Block
+// RAM port-count/capacity ceiling, confirmed via two real failed Vivado
+// synthesis runs, not a software-side choice.
 //
 // Single real frame, exhaustively verified: write frame A's real 20-row
 // band (rows 100-119, 6,400 real pixels) and check every one of them
-// against the real VGA output.
+// against the real VGA output -- including the real widen3to4/widen2to4
+// bit-replication the DUT applies before driving the physical 4-bit DAC
+// pins, mirrored here so the comparison is against the DUT's real output
+// range, not the pre-widened stored value.
 //
 // Two real bugs found while narrowing down to this scope, both
 // confirmed by direct evidence, not assumed:
@@ -41,6 +48,14 @@
 //      overwrite-correctness property itself was already verified (in
 //      monochrome) by the retired DoomGameplayTestbench, so this isn't
 //      new coverage lost, just not re-proven for color in this pass.
+//   3. The DUT's TL response gained real 1-cycle latency once its
+//      storage moved to SyncReadMem (needed for real BRAM inference --
+//      see VGAFramebuffer.scala). That meant a new write's 'a' could now
+//      legitimately fire on the very same cycle the previous write's 'd'
+//      retires (real pipelining), which broke this testbench's original
+//      hardcoded source ID 0 for every write -- TLMonitor's real
+//      re-used-source-ID assertion caught it. Fixed by cycling through
+//      the already-declared IdRange(0,4) instead of reusing one ID.
 
 package chipyard.vga
 
@@ -68,7 +83,7 @@ class VGAFramebufferColorTestHarness(implicit p: Parameters) extends LazyModule 
 
   val fbWidth = 320
   val fbHeight = 240
-  val fbBytesPerPixel = 2 // 16-bit word/pixel (12 real color bits)
+  val fbBytesPerPixel = 1 // 8-bit (3-3-2 RGB) byte/pixel
   val fbBytesPerRow = fbWidth * fbBytesPerPixel
 
   // Real 20-row band (rows 100-119 of the real captured frame) -- see the
@@ -76,13 +91,13 @@ class VGAFramebufferColorTestHarness(implicit p: Parameters) extends LazyModule 
   val bandRowStart = 100
   val bandRowCount = 20
   val fbWords = (fbWidth * bandRowCount * fbBytesPerPixel) / 4
-  require(fbWords == 3200)
+  require(fbWords == 1600)
 
   def loadFrame(name: String): Seq[BigInt] = {
     val src = Source.fromFile(s"/home/ninadjangle/chipyard/generators/chipyard/src/main/resources/vga/$name")
     try { src.getLines().map(line => BigInt(line.trim, 16)).toSeq } finally { src.close() }
   }
-  val frameAWords = loadFrame("doom_color_frame_a.hex")
+  val frameAWords = loadFrame("doom_color332_frame_a.hex")
   require(frameAWords.length == fbWords)
 
   lazy val module = new Impl
@@ -146,7 +161,21 @@ class VGAFramebufferColorTestHarness(implicit p: Parameters) extends LazyModule 
     val writeMask = (1.U(beatBytes.W) << byteInWordIdx)
     val writeDataFull = writeByte << (byteInWordIdx << 3)
 
-    val (_, writeBits) = edge.Put(0.U, realWriteAddr, 0.U, writeDataFull, writeMask)
+    // The DUT's TL response now has real 1-cycle latency (SyncReadMem-
+    // backed, see TLVGAFramebuffer's own header comment), so a new
+    // request's 'a' can legitimately fire on the very same cycle the
+    // previous one's 'd' retires -- back-to-back pipelining, not a bug.
+    // But that means the same source ID can no longer be reused for every
+    // write the way it could against the old zero-latency DUT (every
+    // transaction fully completed within its own cycle then, so id reuse
+    // was never actually simultaneous with anything outstanding). Cycle
+    // through the full declared IdRange(0,4) instead -- confirmed real,
+    // caught by TLMonitor's own re-used-source-ID assertion the first
+    // time this ran against the rewritten DUT.
+    val sourceIdCounter = RegInit(0.U(2.W))
+    when(out.a.fire) { sourceIdCounter := sourceIdCounter + 1.U }
+
+    val (_, writeBits) = edge.Put(sourceIdCounter, realWriteAddr, 0.U, writeDataFull, writeMask)
     out.a.valid := state === sWrite
     out.a.bits := writeBits
     out.d.ready := true.B
@@ -162,24 +191,36 @@ class VGAFramebufferColorTestHarness(implicit p: Parameters) extends LazyModule 
     val inBand = fbY >= bandRowStart.U && fbY < (bandRowStart + bandRowCount).U
     val bandRow = fbY - bandRowStart.U
     val pixelIndex = bandRow * fbWidth.U + fbX
-    val pixelByteIndex = pixelIndex << 1 // 2 bytes/pixel
+    val pixelByteIndex = pixelIndex // 1 byte/pixel now
     val pixelWordIndex = pixelByteIndex >> 2
-    val byteInWord0 = pixelByteIndex(1, 0) // always 0 or 2 (even)
-    val loByte = (curFrame(pixelWordIndex) >> (byteInWord0 << 3))(7, 0)
-    val hiByte = (curFrame(pixelWordIndex) >> ((byteInWord0 + 1.U) << 3))(7, 0)
-    val expectedR = hiByte(3, 0)
-    val expectedG = loByte(7, 4)
-    val expectedB = loByte(3, 0)
+    val byteInWord0 = pixelByteIndex(1, 0)
+    val expectedByte = (curFrame(pixelWordIndex) >> (byteInWord0 << 3))(7, 0)
+    // Mirror the DUT's own widen3to4/widen2to4 bit-replication exactly --
+    // the DUT's real output is the widened value, not the raw stored
+    // 3-/2-bit field, so comparing against the raw field would falsely
+    // fail against a correct DUT.
+    def widen3to4(x: UInt): UInt = Cat(x, x(2))
+    def widen2to4(x: UInt): UInt = Cat(x, x)
+    val expectedR = widen3to4(expectedByte(7, 5))
+    val expectedG = widen3to4(expectedByte(4, 2))
+    val expectedB = widen2to4(expectedByte(1, 0))
+
+    // dut.module.io.vga_r/g/b are Vec(4, Bool()) now (real per-pin IO
+    // leaves, not a UInt(4.W) -- see VGAFramebuffer.scala's io comment),
+    // so compare/print via .asUInt.
+    val gotR = dut.module.io.vga_r.asUInt
+    val gotG = dut.module.io.vga_g.asUInt
+    val gotB = dut.module.io.vga_b.asUInt
 
     val checkThisCycle = (state === sScanning || state === sScanDone) && refVisible && inBand && pclkRef
     val pixelsChecked = RegInit(0.U(32.W))
     when(checkThisCycle) {
       pixelsChecked := pixelsChecked + 1.U
-      when(dut.module.io.vga_r =/= expectedR || dut.module.io.vga_g =/= expectedG || dut.module.io.vga_b =/= expectedB) {
+      when(gotR =/= expectedR || gotG =/= expectedG || gotB =/= expectedB) {
         when(mismatchCount < 5.U) {
           printf("MISMATCH #%d: fbX=%d fbY=%d expectedRGB=%x%x%x gotRGB=%x%x%x\n",
             mismatchCount, fbX, fbY, expectedR, expectedG, expectedB,
-            dut.module.io.vga_r, dut.module.io.vga_g, dut.module.io.vga_b)
+            gotR, gotG, gotB)
         }
         fail()
       }
@@ -233,7 +274,7 @@ class VGAFramebufferColorUnitTest(implicit p: Parameters) extends UnitTest(timeo
 
   when(th.io.done) {
     when(th.io.pass) {
-      printf("VGA COLOR TESTBENCH: PASSED (%d real pixels checked, real 12-bit color from a real captured gameplay frame)\n", th.io.pixelsChecked)
+      printf("VGA COLOR TESTBENCH: PASSED (%d real pixels checked, real 8-bit (3-3-2) color from a real captured gameplay frame)\n", th.io.pixelsChecked)
     } .otherwise {
       printf("VGA COLOR TESTBENCH: FAILED (%d pixels checked)\n", th.io.pixelsChecked)
       assert(false.B, "VGA color testbench reported failure")
