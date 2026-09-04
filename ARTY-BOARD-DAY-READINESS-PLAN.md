@@ -23,6 +23,10 @@ Everything RTL/software/synthesis-side is committed: `doom-challenge-phase1` bra
 - [x] HDMI monitor
 - [ ] USB-Micro cable, board-to-PC -- confirm in hand (does double duty: programming *and* TSI loading)
 - [ ] **USB Mini-B cable, FT232RL-to-PC -- confirmed NOT a Micro-USB port.** The specific FT232RL module in hand (Robu SKU 9707) lists "Mini USB Port Connection" on its own product page -- a different, wider/trapezoidal connector than the Arty board's own Micro-USB port. These are not interchangeable and Mini-USB cables aren't as commonly on hand anymore (common circa PS3 controllers/older digital cameras, largely superseded since). **Real risk of blocking bring-up if not sourced before board day.**
+- [ ] **Confirm the Arty's USB-Micro cable is a real data cable, not power-only.** Some bundled/charging Micro-USB cables have no data lines wired -- JTAG programming needs data. Use one known to have synced a phone or transferred files, not a random charger cable.
+- [ ] **Check whether the VGA-to-HDMI converter needs its own USB power input.** Most of these are active converters (a real chip does the analog-to-digital conversion) and many need separate USB power just to run that chip -- unrelated to the video signal itself. If it has a USB/PWR port, it needs a cable and a power source (wall adapter, PC USB port, or power bank) or it will output nothing at all even with perfect VGA wiring.
+- [ ] **Confirm a standalone HDMI cable exists, converter to monitor** -- not yet explicitly checked; some converters have HDMI built into a short pigtail, others need a separate cable.
+- [ ] **Arty board's own power under load -- untested on this exact bitstream.** This is the first time this specific full RocketChip + DDR3 MIG design touches real hardware. USB power (500mA) is often adequate, but Digilent's own guidance favors the external 5V barrel-jack supply for DDR3-heavy designs. Have the power brick available; if the board behaves flaky or resets unexpectedly on USB power alone, try external power first.
 
 ### Physical wiring
 - [ ] **Pmod VGA onto JB *and* JC together** (not JA -- that was the old monochrome mapping; color needs the full 14-pin real mapping across both headers, confirmed from Digilent's own reference design).
@@ -30,6 +34,9 @@ Everything RTL/software/synthesis-side is committed: `doom-challenge-phase1` bra
 - [ ] **Set the FT232RL's voltage-selector jumper to 3.3V before wiring anything.** The module (Robu SKU 9707) supports both 3.3V and 5V logic levels; the Arty's Pmod headers are 3.3V-only (LVCMOS33, confirmed via the real generated XDC). Feeding 5V logic into a 3.3V-only FPGA pin risks real damage -- check this physically before connecting.
 - [ ] FT232RL wired to **Pmod JD pins 3 and 7** (TX/RX, crossed -- module TXD to one pin, RXD to the other) + a shared GND pin -- this is the *separate* console link DOOM's keyboard input reads from; the board's onboard USB only carries the TSI load link, not this. Do **not** connect the module's VCC to the Pmod header -- the Arty board has its own power; only the two data lines plus ground are needed.
 - [ ] FT232RL's own USB side (Mini-USB, see above) plugged into the PC, ready for its own `usbipd attach` once needed.
+
+### Do tonight, while internet access is easy
+- [ ] **Plug the FT232RL into Windows once and confirm the driver installs.** If this exact adapter has never been plugged into this PC, Windows needs to recognize it as a real COM port (FTDI VCP driver) before `usbipd` can do anything with it. Check Device Manager -> Ports (COM & LPT) shows something like "USB Serial Port (COMx)" -- not sitting under "Unknown devices" or "Other devices." If the driver doesn't auto-install, grab it from FTDI's own site now rather than mid-bring-up tomorrow.
 
 ### Sequencing (do in this order)
 1. Plug the Arty board's USB-Micro cable in. Confirm it enumerates on **Windows** (Device Manager) -- not yet routed into WSL.
