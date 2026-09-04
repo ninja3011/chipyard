@@ -22,6 +22,7 @@ Everything RTL/software/synthesis-side is committed: `doom-challenge-phase1` bra
 - [x] VGA-to-HDMI converter
 - [x] HDMI monitor
 - [ ] USB-Micro cable, board-to-PC -- confirm in hand (does double duty: programming *and* TSI loading)
+- [ ] **USB Mini-B cable, FT232RL-to-PC -- confirmed NOT a Micro-USB port.** The specific FT232RL module in hand (Robu SKU 9707) lists "Mini USB Port Connection" on its own product page -- a different, wider/trapezoidal connector than the Arty board's own Micro-USB port. These are not interchangeable and Mini-USB cables aren't as commonly on hand anymore (common circa PS3 controllers/older digital cameras, largely superseded since). **Real risk of blocking bring-up if not sourced before board day.**
 
 ### Physical wiring
 - [ ] **Pmod VGA onto JB *and* JC together** (not JA -- that was the old monochrome mapping; color needs the full 14-pin real mapping across both headers, confirmed from Digilent's own reference design).
