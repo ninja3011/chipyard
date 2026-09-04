@@ -27,8 +27,9 @@ Everything RTL/software/synthesis-side is committed: `doom-challenge-phase1` bra
 ### Physical wiring
 - [ ] **Pmod VGA onto JB *and* JC together** (not JA -- that was the old monochrome mapping; color needs the full 14-pin real mapping across both headers, confirmed from Digilent's own reference design).
 - [ ] VGA cable: Pmod VGA -> VGA-to-HDMI converter -> HDMI monitor.
-- [ ] FT232RL wired to **Pmod JD pins 3 and 7** (TX/RX) + a GND pin -- this is the *separate* console link DOOM's keyboard input reads from; the board's onboard USB only carries the TSI load link, not this.
-- [ ] FT232RL's own USB side plugged into the PC, ready for its own `usbipd attach` once needed.
+- [ ] **Set the FT232RL's voltage-selector jumper to 3.3V before wiring anything.** The module (Robu SKU 9707) supports both 3.3V and 5V logic levels; the Arty's Pmod headers are 3.3V-only (LVCMOS33, confirmed via the real generated XDC). Feeding 5V logic into a 3.3V-only FPGA pin risks real damage -- check this physically before connecting.
+- [ ] FT232RL wired to **Pmod JD pins 3 and 7** (TX/RX, crossed -- module TXD to one pin, RXD to the other) + a shared GND pin -- this is the *separate* console link DOOM's keyboard input reads from; the board's onboard USB only carries the TSI load link, not this. Do **not** connect the module's VCC to the Pmod header -- the Arty board has its own power; only the two data lines plus ground are needed.
+- [ ] FT232RL's own USB side (Mini-USB, see above) plugged into the PC, ready for its own `usbipd attach` once needed.
 
 ### Sequencing (do in this order)
 1. Plug the Arty board's USB-Micro cable in. Confirm it enumerates on **Windows** (Device Manager) -- not yet routed into WSL.
