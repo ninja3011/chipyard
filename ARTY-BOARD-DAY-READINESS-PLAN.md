@@ -38,21 +38,25 @@ Everything RTL/software/synthesis-side is committed: `doom-challenge-phase1` bra
 ### Do tonight, while internet access is easy
 - [ ] **Plug the FT232RL into Windows once and confirm the driver installs.** If this exact adapter has never been plugged into this PC, Windows needs to recognize it as a real COM port (FTDI VCP driver) before `usbipd` can do anything with it. Check Device Manager -> Ports (COM & LPT) shows something like "USB Serial Port (COMx)" -- not sitting under "Unknown devices" or "Other devices." If the driver doesn't auto-install, grab it from FTDI's own site now rather than mid-bring-up tomorrow.
 
-### Sequencing (do in this order)
+### Two real days, not one: the monitor doesn't arrive until Sunday
+
+Everything below through step 5 is fully doable **tomorrow, with no monitor** -- confirmed real console output takes the place of visual confirmation until Sunday.
+
 1. Plug the Arty board's USB-Micro cable in. Confirm it enumerates on **Windows** (Device Manager) -- not yet routed into WSL.
 2. **Program the bitstream from Windows** (Vivado Hardware Manager needs to see the board directly):
    ```
    vivado -mode batch -source C:/arty100t-build/chipyard/software/doom/baremetal-arty100t/program_bitstream.tcl
    ```
-   (Already mirrored to the Windows build machine and pointed at `RocketArty100TVGAConfig` -- confirmed identical to the WSL source via `diff`.)
+   (Already mirrored to the Windows build machine and pointed at `RocketArty100TVGAConfig` -- confirmed identical to the WSL source via `diff`.) Real success here also definitively confirms the USB-Micro cable carries data, settling that open question for good.
 3. Once programmed, route the board into **WSL**: `usbipd list` -> `usbipd bind --busid <id>` (elevated PowerShell, one-time) -> `usbipd attach --wsl --busid <id>`.
-4. Plug in the FT232RL, route it into WSL too (separate `usbipd attach` for its own device).
+4. Wire the FT232RL (3.3V jumper set, TX/RX crossed to Pmod JD pins 3/7, shared GND, no VCC), confirm its Windows driver, plug in, route it into WSL too (separate `usbipd attach`).
 5. Load and run, from WSL:
    ```
    cd software/doom/baremetal-arty100t && ./bringup.sh doom /dev/ttyUSBx
    ```
-   (or `badapple` instead of `doom`). `uart_tsi` is already built and executable. Expect ~5-6 minutes real load time for DOOM (30.7MB ELF, dominated by the embedded 28.8MB WAD) -- that's normal, not a hang.
-6. Watch the monitor. If nothing appears: check the Pmod VGA is fully seated on *both* JB and JC (a half-seated double-Pmod module is a classic real failure mode), and confirm the FT232RL's TX/RX aren't swapped (harmless to swap and retry).
+   (or `badapple` instead of `doom`). `uart_tsi` is already built and executable. Expect ~5-6 minutes real load time for DOOM (30.7MB ELF, dominated by the embedded 28.8MB WAD) -- that's normal, not a hang. **Watch the FT232RL's own terminal (PuTTY/`screen`/`minicom`) for real console output**: `DG_Init()` calls `uart_puts("[doom] arty100t bare-metal backend up (VGA framebuffer @ 0x04000000)")` over this exact same UART -- seeing that line print is genuine, monitor-independent proof the full chain (bitstream -> boot -> ELF -> real application code) works. Bad Apple prints its own equivalent ("[badapple] loaded, playing").
+6. Also physically seat the Pmod VGA onto JB+JC now, even though its output can't be checked yet -- one less thing to fumble with on Sunday.
+7. **Sunday, once the monitor arrives**: plug it in and watch. Everything upstream of "does the screen show anything" will already be verified -- this step is just the visual confirmation, not a full bring-up from scratch.
 
 ## Known, accepted residual risk (not a blocker)
 
