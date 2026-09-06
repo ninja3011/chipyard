@@ -87,9 +87,27 @@ PLATFORM_OBJS := $(addprefix $(OBJDIR)/, $(PLATFORM_SRC_C:.c=.o) $(PLATFORM_SRC_
 OBJS := $(DOOM_OBJS) $(PLATFORM_OBJS)
 BADAPPLE_OBJS := $(addprefix $(OBJDIR)/badapple_, $(notdir $(BADAPPLE_SRC_C:.c=.o)) $(notdir $(BADAPPLE_SRC_S:.S=.o)))
 
-.PHONY: all clean wad-check vidf-check badapple
+.PHONY: all clean wad-check vidf-check badapple vga_probe uart_probe
 all: wad-check $(OUTPUT)
 badapple: vidf-check $(BADAPPLE_OUTPUT)
+
+# Small, isolated integration tests -- no doomgeneric engine, no WAD/VIDF,
+# each with zero dependency on the other subsystem (see the header comment
+# in each .c file for what a pass/fail result means).
+vga_probe: vga_probe.elf
+uart_probe: uart_probe.elf
+
+vga_probe.elf: vga_probe.c
+	$(CC) $(ARCH_FLAGS) -Os -ggdb3 -Wall -specs=nano.specs \
+		-Wl,-Ttext-segment=0x80000000 -Wl,--gc-sections \
+		-Wl,-Map,vga_probe.elf.map vga_probe.c -o vga_probe.elf
+	$(SIZE) vga_probe.elf
+
+uart_probe.elf: uart_probe.c uart.h
+	$(CC) $(ARCH_FLAGS) -Os -ggdb3 -Wall -specs=nano.specs \
+		-Wl,-Ttext-segment=0x80000000 -Wl,--gc-sections \
+		-Wl,-Map,uart_probe.elf.map uart_probe.c -o uart_probe.elf
+	$(SIZE) uart_probe.elf
 
 # .incbin in wad_embed.S resolves relative to the assembler's cwd, so
 # symlink the real WAD in here rather than fighting include-path rules

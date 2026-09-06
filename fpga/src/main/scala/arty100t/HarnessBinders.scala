@@ -123,6 +123,10 @@ class WithArty100TUART(rxdPin: String = "A9", txdPin: String = "D10") extends Ha
 // Maps the UART device to PMOD JD pins 3/7
 class WithArty100TPMODUART extends WithArty100TUART("G2", "F3")
 
+// Maps the UART device to PMOD JA pins 3/4 (rxd=ja_2/A11, txd=ja_3/D12) --
+// used as a fallback console link when JD's socket is suspected bad.
+class WithArty100TJAUART extends WithArty100TUART("A11", "D12")
+
 class WithArty100TJTAG extends HarnessBinder({
   case (th: HasHarnessInstantiators, port: JTAGPort, chipId: Int) => {
     val ath = th.asInstanceOf[LazyRawModuleImp].wrapper.asInstanceOf[Arty100THarness]
