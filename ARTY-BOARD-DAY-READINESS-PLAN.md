@@ -77,6 +77,26 @@ No console output was ever observed, on either JD (pins 3/7, the originally docu
 ### Issue 2: VGA -- monitor reports "no signal"
 First-ever real hardware test of the VGA path tonight (previously simulation-only). Pmod seating, VGA cable, and HDMI cable/input were all confirmed connected; the board's own heartbeat LED confirms the bitstream is alive and clocking normally. A clock-rate theory (thinking the ~800x525 VESA-standard timing counter was running at the raw 50MHz bus clock instead of a divided ~25MHz pixel clock) was investigated and **ruled out on closer reading** -- `VGAFramebuffer.scala` already has a `pclk_toggle`/`pixelTick` divide-by-2 gate on the counter, so the real cause of "no signal" is still open. Since HSYNC/VSYNC generation is a free-running hardware counter with zero dependency on CPU execution, a real "no signal" result here (as opposed to a black screen with signal lock) points at either the VGA peripheral's RTL/timing itself or something in the physical chain not yet isolated.
 
+## Board-day session 2 (2026-09-07): the "is the CPU executing" question is now answered
+
+Session 1 ended with the open question "is the CPU executing any code at all" genuinely unresolved -- JTAG attempts (both `usbipd`/`vhci_hcd`-virtualized and native-Windows-via-Zadig/WinUSB) hung identically in `ft232r` bitbang mode, ruling out virtualization as the cause but not producing an actual answer. Vivado's ILA/ChipScope debug cores are unavailable on this machine's **BASIC license tier** (`create_debug_core` fails outright: `[Vivado 12-29205]`) -- confirmed via a real attempt, not assumed.
+
+**The workaround: sticky "have I ever seen X" latches wired directly from real internal signals to the board's spare LEDs**, using `chipyard.config.WithTraceIO` (normally a cosim/FireSim-only mechanism) to reach the Rocket core's own instruction-retire signal from the harness. Each latch is a single register that flips permanently the first time its condition is true -- a license-free, from-scratch logic analyzer built entirely out of RTL and LEDs. Five rebuild-and-test cycles, each isolating one more specific question:
+
+1. **Raw electrical passthrough** (`other_leds(2) := harnessIO.rxd`, zero CPU/peripheral dependency): confirmed the FT232RL's signal genuinely reaches the Arty's FPGA fabric. **Wiring was never the bug**, on either JD or JA, at any point tonight.
+2. **"Has the hart retired any instruction ever"**: fired. **The CPU core is alive** -- it executes real instructions, at minimum through the boot ROM's own setup sequence.
+3. **"Has the hart ever retired an instruction from DRAM (`0x80000000`+)"**: fired. **The MSIP wake-from-WFI interrupt works, and the hart does jump into the loaded program** -- this was the single biggest unknown from session 1, now closed.
+4. **"Has execution ever reached the exact TXFIFO-write instruction"** (address found via `objdump` on the real `uart_probe.elf` binary under test, `0x8000015a`): did **not** fire.
+5. **"Has execution ever reached `main()`'s own entry point"** (`0x8000010e`, also from real `objdump`): did **not** fire either.
+
+**Conclusion: execution reaches somewhere in the `0x80000000+` range but never reaches `main()`.** The bug is not in the UART peripheral, not in the FIFO-poll loop, not in wiring -- it's in the narrow (~270-byte) gap between `_start` and `main()`: the C runtime startup sequence (stack pointer init, `.bss` clearing, newlib-nano's call into `main()`). This is a dramatically smaller, more precise target than anything identified in session 1.
+
+### Plan for next session
+1. Start by reading the actual startup/crt0 code newlib-nano links in for this target (`-specs=nano.specs`, no custom `_start` in this project -- it's the toolchain's own default) and look specifically for what could hang or trap between the DRAM entry point and `0x8000010e`.
+2. Consider adding one more sticky latch at a specific address *inside* that gap (e.g., partway through the `.bss`-clear loop) to bisect the ~270 bytes further, the same technique used tonight.
+3. The VGA "no signal" issue (Issue 2) remains completely separate and unexplored further tonight -- worth revisiting once the startup hang is fixed, since a working `main()` might be a precondition for ever seeing VGA output depend on CPU-written framebuffer content (though HSYNC/VSYNC themselves don't need the CPU at all, so that specific "no signal" symptom shouldn't depend on this fix).
+4. Do not resume with `doom`/`badapple` until the startup-hang is understood -- everything found tonight was only reachable because `uart_probe.elf`/`vga_probe.elf` are tiny, fast-iterating, single-purpose binaries.
+
 ### New: isolated, single-purpose test programs (use these instead of doom/badapple for iterating)
 Two new programs exist specifically so each subsystem can be debugged independently, with zero shared code between them (a hang in one can't mask or confound the other):
 - **`vga_probe.c`** (`make vga_probe` in `software/doom/baremetal-arty100t`) -- no UART dependency at all. Fills the whole screen solid red -> green -> blue -> white, cycling forever. Load via `uart_tsi +tty=/dev/ttyUSBx vga_probe.elf` (loads in seconds, no self-check needed). See the file's own header comment for what each possible outcome (no signal / locked-but-black / colors cycling) means.

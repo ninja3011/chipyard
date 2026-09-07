@@ -19,6 +19,51 @@ import chipyard.harness._
 import chipyard.iobinders._
 import testchipip.serdes._
 
+// Sticky "has the hart retired even one instruction since power-on" latch,
+// wired straight to an LED with zero dependency on any peripheral, wiring,
+// or the FT232RL -- the deepest possible probe short of real JTAG access.
+// Uses testchipip's existing TraceIO mechanism (normally for cosim/
+// FireSim tracing), enabled via chipyard.config.WithTraceIO in
+// WithArty100TTweaks, purely to reach this one signal.
+class WithArty100TRetireLED extends HarnessBinder({
+  case (th: HasHarnessInstantiators, port: TracePort, chipId: Int) => {
+    val ath = th.asInstanceOf[LazyRawModuleImp].wrapper.asInstanceOf[Arty100THarness]
+    val trace = port.getIO()
+    val hart0Trace = trace.traces(0)
+    withClockAndReset(hart0Trace.clock, hart0Trace.reset.asAsyncReset) {
+      val retireSeen = RegInit(false.B)
+      when (hart0Trace.trace.insns(0).valid) { retireSeen := true.B }
+      ath.other_leds(3) := retireSeen
+
+      // Narrower question than "did the hart run at all": did it ever
+      // retire an instruction actually fetched from DRAM (0x80000000+),
+      // i.e. did it ever reach the loaded program, as opposed to being
+      // permanently stuck in the boot ROM's WFI wait loop.
+      val dramRetireSeen = RegInit(false.B)
+      val insn = hart0Trace.trace.insns(0)
+      when (insn.valid && insn.iaddr >= "h80000000".U) { dramRetireSeen := true.B }
+      ath.other_leds(4) := dramRetireSeen
+
+      // Precise address check: did execution ever reach the actual TXFIFO
+      // write instruction in uart_probe.elf's inlined uart_putc() (found
+      // via objdump), as opposed to looping forever at 0x80000146 polling
+      // a TXFIFO_FULL status that never clears.
+      val txfifoWriteSeen = RegInit(false.B)
+      when (insn.valid && insn.iaddr === "h8000015a".U) { txfifoWriteSeen := true.B }
+      ath.other_leds(5) := txfifoWriteSeen
+
+      // Narrows the gap further: dramRetireSeen fires on ANY DRAM address,
+      // including crt0/startup code that runs before main() is ever
+      // called. This checks specifically for main()'s own entry point
+      // (found via objdump), to tell "stuck before main()" apart from
+      // "stuck inside main(), before the TXFIFO write."
+      val mainEntrySeen = RegInit(false.B)
+      when (insn.valid && insn.iaddr === "h8000010e".U) { mainEntrySeen := true.B }
+      ath.other_leds(7) := mainEntrySeen
+    }
+  }
+})
+
 class WithArty100TUARTTSI extends HarnessBinder({
   case (th: HasHarnessInstantiators, port: UARTTSIPort, chipId: Int) => {
     val ath = th.asInstanceOf[LazyRawModuleImp].wrapper.asInstanceOf[Arty100THarness]
@@ -117,6 +162,13 @@ class WithArty100TUART(rxdPin: String = "A9", txdPin: String = "D10") extends Ha
       ath.xdc.addIOStandard(io, "LVCMOS33")
       ath.xdc.addIOB(io)
     } }
+
+    // Raw, live passthrough -- zero CPU/peripheral dependency. Directly
+    // mirrors the RX pin's instantaneous electrical value onto an LED, so
+    // "is the FT232RL's signal reaching this pin at all" can be answered
+    // by eye, with nothing else in the chain that could be silently
+    // broken. other_leds(2) is otherwise unused on this board.
+    ath.other_leds(2) := harnessIO.rxd
   }
 })
 
