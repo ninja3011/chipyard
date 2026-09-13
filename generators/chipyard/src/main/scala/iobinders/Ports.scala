@@ -89,6 +89,21 @@ case class SuccessPort     (val getIO: () => Bool)
 case class TracePort       (val getIO: () => TraceOutputTop, val cosimCfg: SpikeCosimConfig)
     extends Port[TraceOutputTop]
 
+// Debug-only: exposes CLINT's own internal msip register for hart 0 directly,
+// bypassing the TileLink read/write path entirely. Added to root-cause a
+// board-specific bug (see fpga/src/main/scala/arty100t/HarnessBinders.scala,
+// WithArty100TDMI/WithClintDebugTap) where writes to CLINT's msip register,
+// made via two independent external bus masters (uart_tsi's TSI bridge and
+// the Debug Module's SBA path), both report success at the protocol level
+// but the CPU never wakes and later reads of the register show 0 -- with no
+// way to distinguish "the write never really took effect" from "it took
+// effect and was cleared again" without this direct, real-time visibility
+// into the register itself. Present only when a config explicitly enables
+// WithClintDebugPunchthrough; inert (an unconnected/unused extra output)
+// for every other config.
+case class ClintDebugPort  (val getIO: () => Bool)
+    extends Port[Bool]
+
 case class CustomBootPort  (val getIO: () => Bool)
     extends Port[Bool]
 

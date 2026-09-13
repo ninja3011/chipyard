@@ -165,17 +165,27 @@ int _isatty(int fd) {
 /* Bump-allocator heap: DOOM's zone allocator (Z_Init) does one big malloc
  * up front, then sub-allocates itself, so we don't need free() to do
  * anything real. Heap grows up from the linker-provided _end towards
- * DRAM's top, leaving an 8MB reserve for stack, which is far more than
- * a single-threaded bare-metal renderer needs. */
+ * the stack.
+ *
+ * HEAP_LIMIT must equal doom_start.S's initial sp (0x87000000) exactly
+ * -- not the old assumption of "DRAM's top minus a reserve". Two things
+ * changed since that comment was written: (1) DRAM only reliably works
+ * up to ~120MB (0x87800000) -- confirmed via a standalone probe payload,
+ * not the full 256MB the SoC's memory map claims -- so a ceiling derived
+ * from 0x90000000 was already wrong; (2) the stack pointer used to be an
+ * unstated assumption ("DRAM's top minus 8MB") but is now a fixed,
+ * known address set explicitly in doom_start.S. Deriving the heap
+ * ceiling from that same fixed address (instead of from the DRAM size)
+ * makes heap-vs-stack collision impossible by construction: the heap
+ * physically cannot grow past where the stack begins. */
 extern char _end[];
-#define DRAM_TOP 0x90000000UL
-#define STACK_RESERVE (8UL * 1024 * 1024)
+#define HEAP_LIMIT 0x87000000UL
 
 void *_sbrk(long incr) {
   static char *heap_ptr = 0;
   if (heap_ptr == 0) heap_ptr = _end;
   char *prev = heap_ptr;
-  if ((uintptr_t)(heap_ptr + incr) > (DRAM_TOP - STACK_RESERVE)) {
+  if ((uintptr_t)(heap_ptr + incr) > HEAP_LIMIT) {
     errno = ENOMEM;
     return (void *)-1;
   }

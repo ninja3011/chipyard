@@ -1,6 +1,7 @@
 package chipyard.fpga.arty100t
 
 import chisel3._
+import chisel3.util.Cat
 
 import freechips.rocketchip.jtag.{JTAGIO}
 import freechips.rocketchip.subsystem.{PeripheryBusKey}
@@ -19,47 +20,51 @@ import chipyard.harness._
 import chipyard.iobinders._
 import testchipip.serdes._
 
-// Sticky "has the hart retired even one instruction since power-on" latch,
-// wired straight to an LED with zero dependency on any peripheral, wiring,
-// or the FT232RL -- the deepest possible probe short of real JTAG access.
-// Uses testchipip's existing TraceIO mechanism (normally for cosim/
-// FireSim tracing), enabled via chipyard.config.WithTraceIO in
-// WithArty100TTweaks, purely to reach this one signal.
-class WithArty100TRetireLED extends HarnessBinder({
+// Xilinx ILA, RTL-instantiated (the one path BASIC-tier Vivado licensing
+// allows -- see ila_gen.vivado.tcl for the create_ip call and the real,
+// confirmed license limit: max 5 probe PORTS, not 5 signals, so the 9
+// signals of interest are packed into 5 ports via Cat()).
+class Arty100TILA extends BlackBox {
+  override def desiredName = "ila_0"
+  val io = IO(new Bundle {
+    val clk = Input(Clock())
+    val probe0 = Input(UInt(1.W))  // insn valid
+    val probe1 = Input(UInt(40.W)) // insn iaddr
+    val probe2 = Input(UInt(32.W)) // insn insn (raw instruction word)
+    val probe3 = Input(UInt(13.W)) // priv(3) ## exception(1) ## interrupt(1) ## cause[7:0](8)
+    val probe4 = Input(UInt(41.W)) // tval[39:0](40) ## reset(1)
+  })
+}
+
+// Clean-baseline ILA harness: this build has NO other probes, NO LED
+// wiring, nothing else added -- purely to observe the boot-ROM WFI/wake
+// boundary directly, on the exact same RTL lineage that worked reliably
+// on real hardware (this file otherwise matches commit 69cbe863).
+class WithArty100TILA extends HarnessBinder({
   case (th: HasHarnessInstantiators, port: TracePort, chipId: Int) => {
-    val ath = th.asInstanceOf[LazyRawModuleImp].wrapper.asInstanceOf[Arty100THarness]
+    // Type-projected cast to reach the autoloaderDone/autoloaderStep fields
+    // declared on HarnessLikeImpl itself -- see the comment on those fields
+    // in Harness.scala for why this, rather than the usual `ath` (outer
+    // Arty100THarness) cast used elsewhere in this file, is needed here.
+    val hli = th.asInstanceOf[Arty100THarness#HarnessLikeImpl]
     val trace = port.getIO()
     val hart0Trace = trace.traces(0)
     withClockAndReset(hart0Trace.clock, hart0Trace.reset.asAsyncReset) {
-      val retireSeen = RegInit(false.B)
-      when (hart0Trace.trace.insns(0).valid) { retireSeen := true.B }
-      ath.other_leds(3) := retireSeen
-
-      // Narrower question than "did the hart run at all": did it ever
-      // retire an instruction actually fetched from DRAM (0x80000000+),
-      // i.e. did it ever reach the loaded program, as opposed to being
-      // permanently stuck in the boot ROM's WFI wait loop.
-      val dramRetireSeen = RegInit(false.B)
       val insn = hart0Trace.trace.insns(0)
-      when (insn.valid && insn.iaddr >= "h80000000".U) { dramRetireSeen := true.B }
-      ath.other_leds(4) := dramRetireSeen
-
-      // Precise address check: did execution ever reach the actual TXFIFO
-      // write instruction in uart_probe.elf's inlined uart_putc() (found
-      // via objdump), as opposed to looping forever at 0x80000146 polling
-      // a TXFIFO_FULL status that never clears.
-      val txfifoWriteSeen = RegInit(false.B)
-      when (insn.valid && insn.iaddr === "h8000015a".U) { txfifoWriteSeen := true.B }
-      ath.other_leds(5) := txfifoWriteSeen
-
-      // Narrows the gap further: dramRetireSeen fires on ANY DRAM address,
-      // including crt0/startup code that runs before main() is ever
-      // called. This checks specifically for main()'s own entry point
-      // (found via objdump), to tell "stuck before main()" apart from
-      // "stuck inside main(), before the TXFIFO write."
-      val mainEntrySeen = RegInit(false.B)
-      when (insn.valid && insn.iaddr === "h8000010e".U) { mainEntrySeen := true.B }
-      ath.other_leds(7) := mainEntrySeen
+      val ila = Module(new Arty100TILA)
+      ila.io.clk := hart0Trace.clock
+      ila.io.probe0 := insn.valid
+      ila.io.probe1 := insn.iaddr
+      ila.io.probe2 := insn.insn
+      ila.io.probe3 := Cat(insn.priv, insn.exception, insn.interrupt, insn.cause(7, 0))
+      // tval truncated from 40 to 31 bits to make room for the DMI
+      // autoloader's diagnostic status plus a direct, no-TileLink-round-trip
+      // read of CLINT's own internal msip register (see Harness.scala/
+      // WithArty100TDMI and WithClintDebugTap below) without changing this
+      // probe's total width -- no ila_gen.vivado.tcl / XDC changes needed.
+      // tval isn't load-bearing for this diagnosis.
+      ila.io.probe4 := Cat(insn.tval(30, 0), hli.clintIpi0Debug, hli.autoloaderDone, hli.autoloaderStep,
+        hli.autoloaderTriggered, hli.autoloaderReqValid, hli.autoloaderReqReady, hart0Trace.reset)
     }
   }
 })
@@ -162,13 +167,6 @@ class WithArty100TUART(rxdPin: String = "A9", txdPin: String = "D10") extends Ha
       ath.xdc.addIOStandard(io, "LVCMOS33")
       ath.xdc.addIOB(io)
     } }
-
-    // Raw, live passthrough -- zero CPU/peripheral dependency. Directly
-    // mirrors the RX pin's instantaneous electrical value onto an LED, so
-    // "is the FT232RL's signal reaching this pin at all" can be answered
-    // by eye, with nothing else in the chain that could be silently
-    // broken. other_leds(2) is otherwise unused on this board.
-    ath.other_leds(2) := harnessIO.rxd
   }
 })
 
@@ -204,5 +202,76 @@ class WithArty100TJTAG extends HarnessBinder({
       ath.xdc.addIOStandard(io, "LVCMOS33")
       ath.xdc.addPullup(io)
     } }
+  }
+})
+
+// Wires the on-chip Arty100TDmiAutoloader (see DmiAutoloader.scala) directly
+// to the Debug Module's DMI port, in place of an external JTAG probe. See
+// DmiAutoloader.scala for the full rationale: this replicates, entirely
+// on-chip, the exact fix the Basys3 board's hand-written DmiAutoloader.v
+// needed for what looks like the same underlying bug (CLINT/msip SBA writes
+// silently dropped once the hart has left reset).
+//
+// 20 seconds at 50MHz gives ample real-world time, after programming the
+// bitstream, to run uart_tsi's ELF-into-DRAM load (usbipd attach, chmod,
+// load, usbipd detach) before the autoloader fires and takes the hart out
+// of reset.
+class WithArty100TDMI extends HarnessBinder({
+  case (th: HasHarnessInstantiators, port: DMIPort, chipId: Int) => {
+    // Type-projected cast to reach autoloaderDone/autoloaderStep on
+    // HarnessLikeImpl itself -- see the field comment in Harness.scala.
+    val hli = th.asInstanceOf[Arty100THarness#HarnessLikeImpl]
+    // Real-hardware diagnosis (via the ILA-exposed `triggered` signal)
+    // showed the autoloader's own trigger-delay counter never advances --
+    // it's still at its RegInit value many minutes after programming,
+    // meaning the clock/reset domain it was given is not a live, running
+    // one on this harness. th.harnessBinderClock/harnessBinderReset are
+    // the pattern WithSimDMI (chipyard's built-in DMI harness binder) uses
+    // -- but that binder is simulation-only, never exercised on real FPGA
+    // hardware in this harness. th.referenceClock/th.referenceReset are
+    // the DUT's own actual clock/reset (same domain the CPU itself runs
+    // on, per Harness.scala's `def referenceClock = dutClock.in.head._1.clock`)
+    // -- proven live by every ILA capture all night showing real hart0
+    // trace activity on it. Switching to that for both the autoloader
+    // itself and the DMI port's clock/reset.
+    val autoloader = withClockAndReset(th.referenceClock, th.referenceReset) {
+      Module(new Arty100TDmiAutoloader(triggerDelayCycles = BigInt(50) * 1000 * 1000 * 20))
+    }
+    port.io.dmi.req.valid := autoloader.io.dmiReq.valid
+    autoloader.io.dmiReq.ready := port.io.dmi.req.ready
+    port.io.dmi.req.bits.addr := autoloader.io.dmiReq.bits.addr
+    port.io.dmi.req.bits.data := autoloader.io.dmiReq.bits.data
+    port.io.dmi.req.bits.op := autoloader.io.dmiReq.bits.op
+
+    autoloader.io.dmiResp.valid := port.io.dmi.resp.valid
+    port.io.dmi.resp.ready := autoloader.io.dmiResp.ready
+    autoloader.io.dmiResp.bits.data := port.io.dmi.resp.bits.data
+    autoloader.io.dmiResp.bits.resp := port.io.dmi.resp.bits.resp
+
+    port.io.dmiClock := th.referenceClock
+    port.io.dmiReset := th.referenceReset
+
+    // See Harness.scala for why these are plain harness-level wires rather
+    // than a directly-shared Module reference: WithArty100TILA (a separate
+    // binder, matched on TracePort) reads these to fold the autoloader's
+    // progress into the existing 5-probe ILA, so a failed wake attempt can
+    // be diagnosed (never triggered vs. stuck retrying vs. completed-but-
+    // still-didn't-work) without yet another rebuild cycle.
+    hli.autoloaderDone := autoloader.io.done
+    hli.autoloaderStep := autoloader.io.step
+    hli.autoloaderTriggered := autoloader.io.triggeredOut
+    hli.autoloaderReqValid := autoloader.io.reqValidOut
+    hli.autoloaderReqReady := autoloader.io.reqReadyOut
+  }
+})
+
+// Consumes chipyard.iobinders.ClintDebugPort (see Ports.scala/IOBinders.scala
+// for what it is and why it exists) and forwards it into the harness-level
+// wire WithArty100TILA reads, the same cross-binder pattern used for the
+// autoloader's own status above.
+class WithClintDebugTap extends HarnessBinder({
+  case (th: HasHarnessInstantiators, port: chipyard.iobinders.ClintDebugPort, chipId: Int) => {
+    val hli = th.asInstanceOf[Arty100THarness#HarnessLikeImpl]
+    hli.clintIpi0Debug := port.io
   }
 })

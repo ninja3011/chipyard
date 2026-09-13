@@ -33,10 +33,18 @@ extern char video_vidf_end[];
 // same real hardware, same real 50kHz answer.
 #define MTIME_HZ 50000ULL
 
+// NOT the `rdtime` CPU instruction: this core doesn't implement the `time`
+// CSR it reads (confirmed against rocket-chip's own CSR.scala -- only
+// cycle/instret/hpmcounterN are in read_mapping), so executing it takes an
+// illegal-instruction trap this bare-metal build has no handler for and
+// hangs forever. See doomgeneric_arty100t.c's rdtime() for the full story
+// (found and fixed there first, via on-hardware checkpoint instrumentation).
+// Same fix here: read CLINT's mtime directly instead, same 50kHz counter,
+// no special instruction.
+#define CLINT_MTIME_ADDR 0x0200BFF8UL
+
 static uint64_t rdtime(void) {
-  uint64_t t;
-  __asm__ volatile ("rdtime %0" : "=r"(t));
-  return t;
+  return *(volatile uint64_t *)CLINT_MTIME_ADDR;
 }
 
 static void sleepMs(uint32_t ms) {

@@ -520,6 +520,38 @@ class WithTraceIOPunchthrough extends OverrideLazyIOBinder({
   }
 })
 
+// See ClintDebugPort in Ports.scala for why this exists. Reads CLINT's
+// internal msip register for hart 0 (freechips.rocketchip.devices.tilelink
+// .CLINT's `ipi(0)`) directly, with no TileLink round-trip -- letting a
+// HarnessBinder watch it in real time (e.g. via an ILA) instead of only
+// being able to observe a settled value read back much later over a
+// separate, already-suspect bus path. Not enabled by default for any
+// config; a board adds `new chipyard.iobinders.WithClintDebugPunchthrough`
+// itself to opt in.
+class WithClintDebugPunchthrough extends OverrideLazyIOBinder({
+  (system: freechips.rocketchip.devices.tilelink.CanHavePeripheryCLINT) => InModuleBody {
+    // Both a plain `:=` to clint.module.io.debugIpi0 directly, and
+    // BoringUtils.bore() on the same, failed with "operand ... is not
+    // visible from the current module ChipTop" -- CLINT lives too many
+    // module levels below where this IOBinder's InModuleBody actually
+    // elaborates for either to reach it. CanHavePeripheryCLINT now instead
+    // exposes clintDebugIpi0Opt, built with the exact same
+    // clintDomainWrapper { InModuleBody { ... } } pattern its own existing
+    // clintTickOpt already uses successfully. Consuming it the same way
+    // WithTraceIOPunchthrough above consumes system.traceIO -- reading a
+    // ModuleValue produced by one InModuleBody from inside another --
+    // resolves it to a plain value automatically; that auto-resolution is
+    // exactly what was missing when this same value was read from a plain
+    // (non-InModuleBody) HarnessBinder closure earlier this project.
+    val ports: Option[ClintDebugPort] = system.clintDebugIpi0Opt.map { debugSignal =>
+      val clintIpi0Debug = IO(Output(Bool())).suggestName("clint_ipi0_debug")
+      clintIpi0Debug := debugSignal
+      ClintDebugPort(() => clintIpi0Debug)
+    }
+    (ports.toSeq, Nil)
+  }
+})
+
 class WithCustomBootPin extends OverrideIOBinder({
   (system: CanHavePeripheryCustomBootPin) => system.custom_boot_pin.map({ p =>
     val sys = system.asInstanceOf[BaseSubsystem]

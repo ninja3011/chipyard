@@ -46,12 +46,39 @@ class Arty100THarness(override implicit val p: Parameters) extends Arty100TShell
   val status_leds = all_leds.take(3)
   val other_leds = all_leds.drop(3)
 
-
   override lazy val module = new HarnessLikeImpl
 
   class HarnessLikeImpl extends Impl with HasHarnessInstantiators {
     all_leds.foreach(_ := DontCare)
     clockOverlay.overlayOutput.node.out(0)._1.reset := ~resetPin
+
+    // Cross-HarnessBinder status channel: WithArty100TDMI (matched on
+    // DMIPort) instantiates the Arty100TDmiAutoloader and writes its
+    // done/step status here; WithArty100TILA (matched on TracePort, a
+    // completely separate binder invocation) reads it back to pack into
+    // the existing ILA probe bundle. Both binders' `th: HasHarnessInstantiators`
+    // parameter IS already this very module instance (HasHarnessInstantiators
+    // is mixed into HarnessLikeImpl itself) -- they reach these fields via
+    // `th.asInstanceOf[Arty100THarness#HarnessLikeImpl]`, a type-projected
+    // cast, not through the outer Arty100THarness/`ath` reference (a plain
+    // val here is a member of this inner module class, not of the outer
+    // LazyModule, so `ath.autoloaderDone` doesn't resolve -- tried and
+    // failed to compile). Also tried routing through InModuleBody at the
+    // outer LazyModule level instead, which compiles but returns
+    // ModuleValue[Bool]/ModuleValue[UInt], not Bool/UInt directly, so `:=`
+    // and Cat() don't accept it either without an unwrap this call site
+    // doesn't have easy access to. Plain vals here, reached via the
+    // type-projected cast, sidestep both problems.
+    val autoloaderDone = WireDefault(false.B)
+    val autoloaderStep = WireDefault(0.U(4.W))
+    val autoloaderTriggered = WireDefault(false.B)
+    val autoloaderReqValid = WireDefault(false.B)
+    val autoloaderReqReady = WireDefault(false.B)
+    // Written by WithClintDebugTap (matched on ClintDebugPort), read by
+    // WithArty100TILA -- CLINT's own internal msip register for hart 0,
+    // sampled live, with no TileLink round-trip. See ClintDebugPort in
+    // chipyard's iobinders/Ports.scala for the full rationale.
+    val clintIpi0Debug = WireDefault(false.B)
 
     val clk_100mhz = clockOverlay.overlayOutput.node.out.head._1.clock
 

@@ -453,6 +453,15 @@ lazy val fpga_shells = (project in file("./fpga/fpga-shells"))
 lazy val chipyard_fpga = (project in file("./fpga"))
   .dependsOn(chipyard, fpga_shells)
   .settings(commonSettings)
+  // dependsOn shares the classpath but not scalac plugins -- this project
+  // never had the chisel3-plugin wired up (unlike fpga_shells just above,
+  // which gets it transitively the same way), because nobody had ever
+  // defined a brand-new Bundle/BlackBox directly in fpga/src/main/scala
+  // before. Every prior line in HarnessBinders.scala only wired up
+  // already-compiled bundle types from other subprojects, so the gap
+  // never surfaced until now: "assertion failed: The Chisel compiler
+  // plugin is now required for compiling Chisel code."
+  .settings(libraryDependencies ++= rocketLibDeps.value)
 
 // Components of FireSim
 

@@ -29,7 +29,10 @@
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "uart.h"
+#include "checkpoint.h"
 #include <stdint.h>
+
+#ifndef CONSOLE_ASCII_VIDEO
 
 // Real address: chosen directly in the Chisel config
 // (RocketArty100TVGAConfig's WithVGAFramebuffer(address = 0x4000000L)),
@@ -54,6 +57,62 @@ static inline uint8_t samplePixelColor(int srcX, int srcY) {
   return (uint8_t)((r3 << 5) | (g3 << 2) | b2);
 }
 
+#else // CONSOLE_ASCII_VIDEO
+
+// Text-mode fallback for RocketArty100TConfig. Two independent facts
+// forced this design, discovered in this order on real hardware:
+//
+// 1. No VGA peripheral exists in this config at all -- writing to
+//    FRAMEBUFFER_BASE would hit an unmapped address and fault on the
+//    first frame (see the top-of-file comment; VGA's own clock-crossing
+//    bug, found 2026-09-11, is this board's *actual* long-standing
+//    CPU-wake root cause, unrelated to DMI/SBA/CLINT -- being fixed
+//    separately, this backend exists to make progress without it).
+// 2. The console UART this backend originally wrote ASCII art to
+//    (uart_puts, same peripheral DG_GetKey polls) is wired to the JA
+//    PMOD header's physical pins (WithArty100TJAUART), not the onboard
+//    USB-UART bridge the working uart_tsi link uses (A9/D10) -- with no
+//    external USB-serial adapter connected to JA on this session's
+//    physical setup, that output has no path off the board at all.
+//
+// So the actual output path here is a plain DRAM scratch buffer instead
+// of any UART: each frame is packed 4 ASCII chars/word (so a host-side
+// uart_tsi +init_read loop only needs COLS*ROWS/4 reads, not one per
+// character) behind a leading sequence-number word a poller can watch to
+// know when a new frame has actually landed since its last read, at a
+// fixed high DRAM address chosen well clear of the program+WAD+heap
+// footprint (the linked image runs to a bit under 0x81c10000).
+//
+// NOT 0x88000000 (128MB offset): confirmed via a standalone probe payload
+// that this board's DRAM only reliably responds up to ~120MB in (tested
+// working through 0x87800000, broken at and beyond 0x88000000 -- reads
+// there return stale/unrelated data regardless of what's written, most
+// likely a MIG/DDR3 configuration limit despite the SoC's memory map
+// claiming a full 256MB window). 0x84000000 (64MB offset) is comfortably
+// inside the confirmed-good range with wide margin on both sides.
+#define ASCII_COLS 64
+#define ASCII_ROWS 32
+#define CONSOLE_FRAME_ADDR 0x84000000UL
+// [0] = sequence number (host polls this to detect a new frame)
+// [1..] = ASCII_COLS*ASCII_ROWS bytes, packed 4/word, row-major
+static volatile uint32_t * const kConsoleSeq = (volatile uint32_t *)CONSOLE_FRAME_ADDR;
+static volatile uint32_t * const kConsoleGrid = (volatile uint32_t *)(CONSOLE_FRAME_ADDR + 4);
+
+// Standard dark-to-light density ramp (10 levels); index by luma>>~5.
+static const char kRamp[] = " .:-=+*#%@";
+#define RAMP_LEVELS ((int)(sizeof(kRamp) - 1))
+
+static inline uint8_t sampleLuma(int srcX, int srcY) {
+  uint32_t px = DG_ScreenBuffer[srcY * DOOMGENERIC_RESX + srcX];
+  uint8_t b = (uint8_t)(px >> 0);
+  uint8_t g = (uint8_t)(px >> 8);
+  uint8_t r = (uint8_t)(px >> 16);
+  // BT.601 integer luma weights (77+150+29 == 256).
+  return (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+}
+
+#endif // CONSOLE_ASCII_VIDEO
+
 // mtime tick rate: confirmed (not assumed) from this exact config's own
 // generated DTS -- `timebase-frequency = <50000>` under /cpus, in
 // fpga/generated-src/.../*.dts, generated 2026-08-28. This is NOT the
@@ -64,10 +123,21 @@ static inline uint8_t samplePixelColor(int srcX, int srcY) {
 // worth having caught before real hardware time, not during it.
 #define MTIME_HZ 50000ULL
 
+// NOT the `rdtime` CPU instruction: verified against this exact core's own
+// CSR.scala that the `time` CSR it reads is not implemented here (only
+// `cycle`/`instret`/hpmcounterN are in read_mapping) -- executing `rdtime`
+// takes an illegal-instruction trap that this bare-metal build has no
+// handler for, and the core hangs on that single instruction forever
+// (confirmed on real hardware via checkpoint instrumentation: execution
+// reaches immediately before this line and never reaches immediately
+// after it). CLINT's mtime is the same underlying 50kHz counter
+// (MTIME_HZ below), reached instead via an ordinary memory read of a
+// peripheral this project has used reliably since day one, with no
+// special CPU instruction involved.
+#define CLINT_MTIME_ADDR 0x0200BFF8UL
+
 static uint64_t rdtime(void) {
-  uint64_t t;
-  __asm__ volatile ("rdtime %0" : "=r"(t));
-  return t;
+  return *(volatile uint64_t *)CLINT_MTIME_ADDR;
 }
 
 static uint64_t s_startTimeTicks;
@@ -107,9 +177,20 @@ static unsigned char mapByteToDoomKey(unsigned char c) {
 
 void DG_Init(void) {
   uart_init();
+  CHECKPOINT(61); /* uart_init() done */
   s_startTimeTicks = rdtime();
+  CHECKPOINT(62); /* rdtime() done */
+#ifndef CONSOLE_ASCII_VIDEO
   uart_puts("\r\n[doom] arty100t bare-metal backend up (VGA framebuffer @ 0x04000000)\r\n");
+#else
+  uart_puts("\r\n[doom] arty100t bare-metal backend up (ASCII console video, no VGA)\r\n");
+  CHECKPOINT(63); /* first uart_puts() done */
+  uart_puts("\033[2J"); // clear screen once; each frame re-homes the cursor instead of re-clearing
+  CHECKPOINT(64); /* second uart_puts() done -- end of DG_Init */
+#endif
 }
+
+#ifndef CONSOLE_ASCII_VIDEO
 
 void DG_DrawFrame(void) {
   // 1-byte-per-pixel color memory, [7:5]=R[2:0],[4:2]=G[2:0],[1:0]=B[1:0]
@@ -129,6 +210,49 @@ void DG_DrawFrame(void) {
     }
   }
 }
+
+#else // CONSOLE_ASCII_VIDEO
+
+void DG_DrawFrame(void) {
+  // Written into DRAM 4 chars/word instead of streamed over UART -- see
+  // the CONSOLE_FRAME_ADDR comment above for why (the console UART this
+  // originally targeted turned out to be wired to a physically
+  // disconnected header on this session's hardware, discovered only
+  // after the fact; DRAM has no such dependency, a host machine reads it
+  // back directly over the same already-working uart_tsi/DMI link used
+  // to load the program in the first place).
+  //
+  // Not throttled the way the UART path was: writing to local DRAM costs
+  // nothing like UART TX time did, so every frame gets written. A host
+  // poller decides its own cadence by watching the sequence word; it
+  // will simply see whatever the latest completed frame is, same as
+  // any other double-buffered display.
+  uint32_t word = 0;
+  int shift = 0;
+  int wordIdx = 0;
+  for (int cy = 0; cy < ASCII_ROWS; cy++) {
+    int srcY = (cy * DOOMGENERIC_RESY) / ASCII_ROWS;
+    for (int cx = 0; cx < ASCII_COLS; cx++) {
+      int srcX = (cx * DOOMGENERIC_RESX) / ASCII_COLS;
+      uint8_t luma = sampleLuma(srcX, srcY);
+      char c = kRamp[(luma * RAMP_LEVELS) >> 8];
+      word |= ((uint32_t)(uint8_t)c) << shift;
+      shift += 8;
+      if (shift == 32) {
+        kConsoleGrid[wordIdx++] = word;
+        word = 0;
+        shift = 0;
+      }
+    }
+  }
+  if (shift != 0) kConsoleGrid[wordIdx++] = word; // ASCII_COLS*ASCII_ROWS not a multiple of 4: flush remainder
+  // Sequence number last, after the grid it describes is fully written --
+  // a poller that only checks *this* word before reading the grid always
+  // sees a grid at least as new as the sequence number it just read.
+  (*kConsoleSeq)++;
+}
+
+#endif // CONSOLE_ASCII_VIDEO
 
 void DG_SleepMs(uint32_t ms) {
   uint64_t target = rdtime() + ((uint64_t)ms * MTIME_HZ) / 1000ULL;
@@ -168,6 +292,7 @@ int main(int argc, char **argv) {
   // myargv[0] today, but that's fragile to depend on). Pass a safe,
   // always-valid fake argv instead.
   (void)argc; (void)argv;
+  CHECKPOINT(3); /* main() entry */
   static char *fake_argv[] = { "doom", NULL };
   doomgeneric_Create(1, fake_argv);
   while (1) {

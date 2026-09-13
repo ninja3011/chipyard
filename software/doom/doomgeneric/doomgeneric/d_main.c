@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "checkpoint.h"
 #include "deh_main.h"
 #include "doomdef.h"
 #include "doomstat.h"
@@ -1169,6 +1170,8 @@ void D_DoomMain (void)
     int numiwadlumps;
 #endif
 
+    CHECKPOINT(7); /* D_DoomMain entry */
+
     I_AtExit(D_Endoom, false);
 
     // print banner
@@ -1177,6 +1180,7 @@ void D_DoomMain (void)
 
     DEH_printf("Z_Init: Init zone memory allocation daemon. \n");
     Z_Init ();
+    CHECKPOINT(8); /* Z_Init() done */
 
 #ifdef FEATURE_MULTIPLAYER
     //!
@@ -1352,6 +1356,7 @@ void D_DoomMain (void)
     // init subsystems
     DEH_printf("V_Init: allocate screens.\n");
     V_Init ();
+    CHECKPOINT(9); /* V_Init() done */
 
     // Load configuration files before initialising other subsystems.
     DEH_printf("M_LoadDefaults: Load system defaults.\n");
@@ -1364,6 +1369,7 @@ void D_DoomMain (void)
 
     // Find main IWAD file and load it.
     iwadfile = D_FindIWAD(IWAD_MASK_DOOM, &gamemission);
+    CHECKPOINT(10); /* D_FindIWAD() returned */
 
     // None found?
 
@@ -1376,7 +1382,9 @@ void D_DoomMain (void)
     modifiedgame = false;
 
     DEH_printf("W_Init: Init WADfiles.\n");
+    CHECKPOINT(11); /* about to call D_AddFile(iwadfile) -- WAD load starts */
     D_AddFile(iwadfile);
+    CHECKPOINT(12); /* D_AddFile(iwadfile) returned -- WAD load done */
 #if ORIGCODE
     numiwadlumps = numlumps;
 #endif
@@ -1387,6 +1395,7 @@ void D_DoomMain (void)
     // we're playing and which version of Vanilla Doom we need to emulate.
     D_IdentifyVersion();
     InitGameVersion();
+    CHECKPOINT(13); /* D_IdentifyVersion()/InitGameVersion() done */
 
 #if ORIGCODE
     //!
@@ -1762,9 +1771,11 @@ void D_DoomMain (void)
 
     DEH_printf("R_Init: Init DOOM refresh daemon - ");
     R_Init ();
+    CHECKPOINT(14); /* R_Init() done */
 
     DEH_printf("\nP_Init: Init Playloop state.\n");
     P_Init ();
+    CHECKPOINT(15); /* P_Init() done */
 
     DEH_printf("S_Init: Setting up sound.\n");
     S_Init (sfxVolume * 8, musicVolume * 8);
@@ -1840,6 +1851,7 @@ void D_DoomMain (void)
 			D_StartTitle ();                // start up intro loop
     }
 
+    CHECKPOINT(16); /* about to enter D_DoomLoop() -- the main game loop */
     D_DoomLoop ();
 }
 
