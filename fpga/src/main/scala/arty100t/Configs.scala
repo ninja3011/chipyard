@@ -58,7 +58,17 @@ class WithArty100TTweaks(freqMHz: Double = 50) extends Config(
   new WithSBADebugModule ++
   new chipyard.config.WithDMIDTM ++
   new WithNoDesignKey ++
-  new testchipip.tsi.WithUARTTSIClient ++
+  // Load-link baud rate raised from the 115200 default: the entire
+  // uart_tsi ELF-load time (measured at ~50 minutes for DOOM's ~29MB
+  // image) is dominated by this single UART's bit rate, not by anything
+  // the CPU/DUT does -- 29MB / (115200bps / 10 bits-per-byte) is itself
+  // ~42 minutes. 921600 (8x) is the highest rate on the host tool's own
+  // supported list (testchip_uart_tsi.cc) that's still comfortably
+  // within normal UART electrical margins over the on-board USB-UART
+  // path (not the separate physical FT232 console link, which is
+  // untouched by this). Any hardware load using this bitstream must
+  // pass a matching `+baudrate=921600` to uart_tsi or it won't sync.
+  new testchipip.tsi.WithUARTTSIClient(initBaudRate = BigInt(921600)) ++
   new chipyard.harness.WithSerialTLTiedOff ++
   new chipyard.harness.WithHarnessBinderClockFreqMHz(freqMHz) ++
   new chipyard.config.WithUniformBusFrequencies(freqMHz) ++
