@@ -164,3 +164,11 @@ class BringupArty100TConfig extends Config(
   new WithArty100TTweaks(freqMHz = 50) ++
   new testchipip.serdes.WithSerialTLPHYParams(testchipip.serdes.DecoupledInternalSyncSerialPhyParams(freqMHz=50)) ++
   new chipyard.ChipBringupHostConfig)
+
+// Rocket + the INT8 8x8 tile matrix engine (chipyard.accel.Int8TileEngine,
+// custom0 RoCC opcode): the accelerator for the inference/LoRA project.
+class RocketArty100TInt8Config extends Config(
+  new chipyard.accel.WithInt8TileEngine ++
+  new WithArty100TTweaks ++
+  new chipyard.config.WithBroadcastManager ++ // no l2
+  new chipyard.RocketConfig)

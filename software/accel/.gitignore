@@ -1,0 +1,17 @@
+# built images and host binaries
+*.elf
+*.map
+llm/llm_host
+llm/llm_host15
+llm/llm_train_host
+llm/llm_train_host15
+# large model checkpoints -- download from huggingface karpathy/tinyllamas (see README)
+llm/stories15M.bin
+llm/stories15M_i8.bin
+# generated experiment variants (padding / debug scaffolding)
+llm/llm_train_arty2_p*.c
+llm/pad_*.S
+llm/llm_core_pad.h
+llm/llm_core_mis.h
+llm/llm_dbg5.c
+__pycache__/
