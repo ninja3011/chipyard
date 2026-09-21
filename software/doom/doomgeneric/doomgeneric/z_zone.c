@@ -20,6 +20,7 @@
 #include "z_zone.h"
 #include "i_system.h"
 #include "doomtype.h"
+#include "checkpoint.h"
 
 
 //
@@ -100,6 +101,8 @@ void Z_Init (void)
     int		size;
 
     mainzone = (memzone_t *)I_ZoneBase (&size);
+    CHECKPOINT_VALUE(111, (uint32_t)(uintptr_t)mainzone); /* raw zone pointer from I_ZoneBase(), before Z_Init writes anything into it */
+    CHECKPOINT_VALUE(112, (uint32_t)size); /* zone size I_ZoneBase() actually returned */
     mainzone->size = size;
 
     // set the entire zone to one free block

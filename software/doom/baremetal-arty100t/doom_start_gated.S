@@ -38,6 +38,14 @@
 .section .text._start
 .global _start
 _start:
+    /* START GATE (see software/accel/accel_start_gated.S): uart_tsi has no
+     * load-complete barrier, so spin until it writes the flag after the load. */
+    li      t0, 0x86100000
+    li      t1, 0x600DF00D
+1:  lw      t2, 0(t0)
+    bne     t2, t1, 1b
+    sw      zero, 0(t0)
+    fence
     .option push
     .option norelax
     li      sp, 0x87000000        /* THE missing instruction */

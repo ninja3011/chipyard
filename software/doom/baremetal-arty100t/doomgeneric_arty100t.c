@@ -59,44 +59,23 @@ static inline uint8_t samplePixelColor(int srcX, int srcY) {
 
 #else // CONSOLE_ASCII_VIDEO
 
-// Text-mode fallback for RocketArty100TConfig. Two independent facts
-// forced this design, discovered in this order on real hardware:
+// Text-mode backend for RocketArty100TConfig: no VGA peripheral exists in
+// this config at all (writing to FRAMEBUFFER_BASE would hit an unmapped
+// address and fault on the first frame -- VGA's own clock-crossing bug,
+// found 2026-09-11, is this board's *actual* long-standing CPU-wake root
+// cause, unrelated to DMI/SBA/CLINT, and is being fixed separately). This
+// backend renders to plain ASCII text over the JA PMOD header UART
+// instead (uart_puts, same peripheral DG_GetKey polls for input), via a
+// real USB-serial adapter wired to those pins.
 //
-// 1. No VGA peripheral exists in this config at all -- writing to
-//    FRAMEBUFFER_BASE would hit an unmapped address and fault on the
-//    first frame (see the top-of-file comment; VGA's own clock-crossing
-//    bug, found 2026-09-11, is this board's *actual* long-standing
-//    CPU-wake root cause, unrelated to DMI/SBA/CLINT -- being fixed
-//    separately, this backend exists to make progress without it).
-// 2. The console UART this backend originally wrote ASCII art to
-//    (uart_puts, same peripheral DG_GetKey polls) is wired to the JA
-//    PMOD header's physical pins (WithArty100TJAUART), not the onboard
-//    USB-UART bridge the working uart_tsi link uses (A9/D10) -- with no
-//    external USB-serial adapter connected to JA on this session's
-//    physical setup, that output has no path off the board at all.
-//
-// So the actual output path here is a plain DRAM scratch buffer instead
-// of any UART: each frame is packed 4 ASCII chars/word (so a host-side
-// uart_tsi +init_read loop only needs COLS*ROWS/4 reads, not one per
-// character) behind a leading sequence-number word a poller can watch to
-// know when a new frame has actually landed since its last read, at a
-// fixed high DRAM address chosen well clear of the program+WAD+heap
-// footprint (the linked image runs to a bit under 0x81c10000).
-//
-// NOT 0x88000000 (128MB offset): confirmed via a standalone probe payload
-// that this board's DRAM only reliably responds up to ~120MB in (tested
-// working through 0x87800000, broken at and beyond 0x88000000 -- reads
-// there return stale/unrelated data regardless of what's written, most
-// likely a MIG/DDR3 configuration limit despite the SoC's memory map
-// claiming a full 256MB window). 0x84000000 (64MB offset) is comfortably
-// inside the confirmed-good range with wide margin on both sides.
+// (Earlier in this project, before that adapter was connected, this same
+// output was instead packed into a DRAM scratch buffer at 0x84000000 and
+// polled from the host over uart_tsi -- useful for proving the engine
+// renders real frames at all, but a ~50-minute debug-reload per readback
+// is nowhere near watchable. Now that there's a live UART link, that
+// workaround is gone in favor of streaming directly.)
 #define ASCII_COLS 64
 #define ASCII_ROWS 32
-#define CONSOLE_FRAME_ADDR 0x84000000UL
-// [0] = sequence number (host polls this to detect a new frame)
-// [1..] = ASCII_COLS*ASCII_ROWS bytes, packed 4/word, row-major
-static volatile uint32_t * const kConsoleSeq = (volatile uint32_t *)CONSOLE_FRAME_ADDR;
-static volatile uint32_t * const kConsoleGrid = (volatile uint32_t *)(CONSOLE_FRAME_ADDR + 4);
 
 // Standard dark-to-light density ramp (10 levels); index by luma>>~5.
 static const char kRamp[] = " .:-=+*#%@";
@@ -214,42 +193,37 @@ void DG_DrawFrame(void) {
 #else // CONSOLE_ASCII_VIDEO
 
 void DG_DrawFrame(void) {
-  // Written into DRAM 4 chars/word instead of streamed over UART -- see
-  // the CONSOLE_FRAME_ADDR comment above for why (the console UART this
-  // originally targeted turned out to be wired to a physically
-  // disconnected header on this session's hardware, discovered only
-  // after the fact; DRAM has no such dependency, a host machine reads it
-  // back directly over the same already-working uart_tsi/DMI link used
-  // to load the program in the first place).
+  // Streamed live over the JA UART now that a real USB-serial adapter is
+  // wired to it -- the DRAM-scratch-buffer workaround (writing packed
+  // ASCII into 0x84000000, polled over uart_tsi) only existed because
+  // that UART was physically disconnected earlier in this project; it
+  // proved the engine renders real frames, but a ~50-minute debug-reload
+  // per readback is nowhere near watchable, let alone playable.
   //
-  // Not throttled the way the UART path was: writing to local DRAM costs
-  // nothing like UART TX time did, so every frame gets written. A host
-  // poller decides its own cadence by watching the sequence word; it
-  // will simply see whatever the latest completed frame is, same as
-  // any other double-buffered display.
-  uint32_t word = 0;
-  int shift = 0;
-  int wordIdx = 0;
+  // Throttled to every 3rd call: DOOM's internal tic rate is 35Hz, but at
+  // 115200 baud a full ASCII_COLS x ASCII_ROWS frame (~2200 bytes incl.
+  // line endings) caps out around 5-6 frames/sec of real UART throughput.
+  // Sending every frame would just make UART TX time the new bottleneck
+  // and back game logic up behind it; this keeps game logic at full rate
+  // while the console only shows what the link can actually carry.
+  static int frameCounter = 0;
+  CHECKPOINT_VALUE(101, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* pointer value at DG_DrawFrame entry -- compare against slot 100 (right after malloc) to tell a NULL-from-the-start malloc failure apart from later corruption */
+  if ((frameCounter++ % 3) != 0) return;
+
+  char line[ASCII_COLS + 3]; // + \r \n \0
+  uart_puts("\033[H"); // cursor home, no clear -- avoids full-screen flicker
   for (int cy = 0; cy < ASCII_ROWS; cy++) {
     int srcY = (cy * DOOMGENERIC_RESY) / ASCII_ROWS;
     for (int cx = 0; cx < ASCII_COLS; cx++) {
       int srcX = (cx * DOOMGENERIC_RESX) / ASCII_COLS;
       uint8_t luma = sampleLuma(srcX, srcY);
-      char c = kRamp[(luma * RAMP_LEVELS) >> 8];
-      word |= ((uint32_t)(uint8_t)c) << shift;
-      shift += 8;
-      if (shift == 32) {
-        kConsoleGrid[wordIdx++] = word;
-        word = 0;
-        shift = 0;
-      }
+      line[cx] = kRamp[(luma * RAMP_LEVELS) >> 8];
     }
+    line[ASCII_COLS] = '\r';
+    line[ASCII_COLS + 1] = '\n';
+    line[ASCII_COLS + 2] = '\0';
+    uart_puts(line);
   }
-  if (shift != 0) kConsoleGrid[wordIdx++] = word; // ASCII_COLS*ASCII_ROWS not a multiple of 4: flush remainder
-  // Sequence number last, after the grid it describes is fully written --
-  // a poller that only checks *this* word before reading the grid always
-  // sees a grid at least as new as the sequence number it just read.
-  (*kConsoleSeq)++;
 }
 
 #endif // CONSOLE_ASCII_VIDEO
@@ -264,10 +238,14 @@ uint32_t DG_GetTicksMs(void) {
   return (uint32_t)((elapsed * 1000ULL) / MTIME_HZ);
 }
 
+static uint32_t s_rawByteCount = 0; /* every byte ever seen on RX, mapped or not -- tests whether the idle/unattended RX line is producing phantom bytes (electrical noise, no real keyboard attached) that could be injecting random input and explaining why otherwise-identical runs crash at different code paths */
+
 int DG_GetKey(int *pressed, unsigned char *doomKey) {
   // Drain any new raw bytes into press+release event pairs first.
   int c;
   while ((c = uart_getc_nonblock()) >= 0) {
+    s_rawByteCount++;
+    CHECKPOINT_VALUE(115, s_rawByteCount); /* cumulative RX byte count -- overwritten every call, so this is the latest total at (or near) crash time */
     unsigned char dk = mapByteToDoomKey((unsigned char)c);
     if (dk == 0) continue;
     pushKeyEvent(1, dk);

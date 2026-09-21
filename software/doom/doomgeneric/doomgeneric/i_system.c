@@ -55,8 +55,21 @@
 #include <CoreFoundation/CFUserNotification.h>
 #endif
 
-#define DEFAULT_RAM 6 /* MiB */
-#define MIN_RAM     6  /* MiB */
+// Was 6 MiB (likely a conservative guess from before this board's real heap
+// headroom was known). Testing a theory: with zero player input ever (no
+// real keyboard attached to these unattended test runs), DOOM enters
+// attract-mode demo looping within seconds and stays there for the entire
+// ~50+ minute unattended reload/read cycle -- far more tics than any real
+// playtest would ever reach. A too-small zone forces much more aggressive
+// PU_CACHE eviction under that much sustained demo-cycling than vanilla's
+// default 16MiB would, which fits the observed symptom: otherwise-identical
+// runs crashing with a null-pointer read/wild jump at a DIFFERENT address
+// each time, depending on how many demo cycles ran before the crash. We
+// have ~80MiB of confirmed heap headroom (DG_ScreenBuffer's 1MiB + this
+// zone + everything else, all comfortably under HEAP_LIMIT in syscalls.c),
+// so matching vanilla's own default costs nothing here.
+#define DEFAULT_RAM 16 /* MiB */
+#define MIN_RAM     16  /* MiB */
 
 
 typedef struct atexit_listentry_s atexit_listentry_t;

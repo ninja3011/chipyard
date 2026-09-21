@@ -34,8 +34,10 @@ Console logs: `results/`.
 Any image larger than 4 KB owns those addresses, so two words of code or data were silently replaced
 (found by checksumming a 15.7 MB blob on the board against the host: exactly two words differed). Whether a
 program survived depended on whether those words landed in dead code -> the "deterministic per-binary,
-layout-dependent" stalls (and NaNs with the 15M weights). This likely affected the earlier DOOM crashes too
-(DOOM's code is far larger than 4 KB).
+layout-dependent" stalls (and NaNs with the 15M weights).
+**Not the DOOM crash, though** (checked): in the earlier DOOM images those two words fall inside the automap code
+(AM_drawGrid/AM_drawMline), which the attract loop never runs, and a DOOM build with the *old* layout but the start
+gate runs fine (see DOOM A/B below).
 Workaround (no bitstream change): `accel_link.ld` keeps only the start gate below 0x1000 and starts all other
 sections at 0x80002000. Proper fix: move the two checkpoint addresses in DmiAutoloader.scala (needs a rebuild).
 
@@ -59,3 +61,12 @@ uart_tsi +tty=<Digilent if01> +baudrate=921600 +no_hart0_msip +init_read=0x80000
 ```
 Training-text note: a rare end-of-text token (EOS) in the fine-tune text prevents convergence for the 15M model (loss floors ~0.74,
 junk tokens appear); the final text has none. Rare names ("Ninad") are also hard for a rank-8 last-layer adapter at 15M.
+
+## DOOM A/B on the same bitstream (RocketArty100TConfig), all from a clean reprogram
+| build | outcome (logs in results/doom_*) |
+|---|---|
+| original ungated image (`doom-arty100t-console.elf`) | prints the startup line, clears the screen, then `[doom] exited with code -1` |
+| start gate + OLD layout (`...-gated-oldlayout.elf`) | initializes fully and renders frames continuously (156+ frames, no traps) |
+| start gate + sentinel hole (`...-gated.elf`) | same, 433+ frames / 5+ minutes, no traps |
+So the load barrier (core running while `uart_tsi` is still streaming the ELF) is what broke DOOM's startup; the
+sentinel words only mattered for images where they land in executed code (the LLM programs).

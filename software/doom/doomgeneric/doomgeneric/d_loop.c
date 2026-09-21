@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "checkpoint.h"
 #include "doomfeatures.h"
 
 #include "d_event.h"
@@ -140,6 +141,7 @@ static boolean BuildNewTic(void)
 
     gameticdiv = gametic/ticdup;
 
+    CHECKPOINT_VALUE(113, (uint32_t)(uintptr_t)loop_interface); /* loop_interface at BuildNewTic entry -- overwritten every call, so this shows its value at (or just before) the crash */
     I_StartTic ();
     loop_interface->ProcessEvents();
 
@@ -823,4 +825,5 @@ void TryRunTics (void)
 void D_RegisterLoopCallbacks(loop_interface_t *i)
 {
     loop_interface = i;
+    CHECKPOINT_VALUE(114, (uint32_t)(uintptr_t)loop_interface); /* one-time: confirms it was set correctly at registration */
 }

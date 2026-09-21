@@ -30,6 +30,16 @@ static inline void CHECKPOINT(int n) {
   *slot = 0xC0DE0000u | (uint32_t)(n & 0xFFFF);
 }
 
+/* Like CHECKPOINT, but writes an arbitrary 32-bit value instead of the
+ * fixed marker -- for logging an actual pointer/variable value (e.g.
+ * malloc's return) rather than just "code reached this line". Slots
+ * 100+ are reserved for these so they never collide with a real
+ * CHECKPOINT(n) marker. */
+static inline void CHECKPOINT_VALUE(int n, uint32_t value) {
+  volatile uint32_t *slot = (volatile uint32_t *)(CHECKPOINT_BASE + 4UL * (uint32_t)n);
+  *slot = value;
+}
+
 /*
  * Checkpoint numbering (also mirrored as comments at each call site):
  *  1  doom_start.S,       right after sp is set

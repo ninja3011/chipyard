@@ -21,7 +21,8 @@ void doomgeneric_Create(int argc, char **argv)
 	M_FindResponseFile();
 
 	DG_ScreenBuffer = malloc(DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
-	CHECKPOINT(5); /* DG_ScreenBuffer malloc succeeded */
+	CHECKPOINT(5); /* DG_ScreenBuffer malloc call returned (not proven non-NULL) */
+	CHECKPOINT_VALUE(100, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* actual pointer value, right after malloc */
 
 	DG_Init();
 	CHECKPOINT(6); /* DG_Init() done, about to call D_DoomMain() */

@@ -27,6 +27,7 @@
 
 #include "config.h"
 #include "checkpoint.h"
+#include "doomgeneric.h" /* for DG_ScreenBuffer -- logging its value to bisect where it gets corrupted */
 #include "deh_main.h"
 #include "doomdef.h"
 #include "doomstat.h"
@@ -407,8 +408,10 @@ void doomgeneric_Tick()
 {
     // frame syncronous IO operations
     I_StartFrame ();
+    CHECKPOINT(23); /* doomgeneric_Tick() entry, after I_StartFrame() -- overwritten every call */
 
     TryRunTics (); // will run at least one tic
+    CHECKPOINT(24); /* TryRunTics() returned inside doomgeneric_Tick() -- overwritten every call */
 
     S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
 
@@ -417,6 +420,7 @@ void doomgeneric_Tick()
     {
         D_Display ();
     }
+    CHECKPOINT(25); /* D_Display() returned (or was skipped) -- overwritten every call */
 }
 
 //
@@ -438,18 +442,23 @@ void D_DoomLoop (void)
 
     main_loop_started = true;
 
+    CHECKPOINT(17); /* about to call TryRunTics() for the first time */
     TryRunTics();
+    CHECKPOINT(18); /* first TryRunTics() returned */
 
     I_SetWindowTitle(gamedescription);
     I_GraphicsCheckCommandLine();
     I_SetGrabMouseCallback(D_GrabMouseCallback);
     I_InitGraphics();
+    CHECKPOINT(19); /* I_InitGraphics() returned */
     I_EnableLoadingDisk();
 
     V_RestoreBuffer();
     R_ExecuteSetViewSize();
+    CHECKPOINT(20); /* R_ExecuteSetViewSize() returned */
 
     D_StartGameLoop();
+    CHECKPOINT(21); /* D_StartGameLoop() returned, about to call doomgeneric_Tick() once */
 
     if (testcontrols)
     {
@@ -457,6 +466,7 @@ void D_DoomLoop (void)
     }
 
     doomgeneric_Tick();
+    CHECKPOINT(22); /* first doomgeneric_Tick() (inside D_DoomLoop) returned */
 }
 
 
@@ -1171,6 +1181,7 @@ void D_DoomMain (void)
 #endif
 
     CHECKPOINT(7); /* D_DoomMain entry */
+    CHECKPOINT_VALUE(102, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer at D_DoomMain entry */
 
     I_AtExit(D_Endoom, false);
 
@@ -1181,6 +1192,7 @@ void D_DoomMain (void)
     DEH_printf("Z_Init: Init zone memory allocation daemon. \n");
     Z_Init ();
     CHECKPOINT(8); /* Z_Init() done */
+    CHECKPOINT_VALUE(103, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after Z_Init() */
 
 #ifdef FEATURE_MULTIPLAYER
     //!
@@ -1357,6 +1369,7 @@ void D_DoomMain (void)
     DEH_printf("V_Init: allocate screens.\n");
     V_Init ();
     CHECKPOINT(9); /* V_Init() done */
+    CHECKPOINT_VALUE(104, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after V_Init() */
 
     // Load configuration files before initialising other subsystems.
     DEH_printf("M_LoadDefaults: Load system defaults.\n");
@@ -1370,6 +1383,7 @@ void D_DoomMain (void)
     // Find main IWAD file and load it.
     iwadfile = D_FindIWAD(IWAD_MASK_DOOM, &gamemission);
     CHECKPOINT(10); /* D_FindIWAD() returned */
+    CHECKPOINT_VALUE(105, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after D_FindIWAD() */
 
     // None found?
 
@@ -1385,6 +1399,7 @@ void D_DoomMain (void)
     CHECKPOINT(11); /* about to call D_AddFile(iwadfile) -- WAD load starts */
     D_AddFile(iwadfile);
     CHECKPOINT(12); /* D_AddFile(iwadfile) returned -- WAD load done */
+    CHECKPOINT_VALUE(106, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after D_AddFile() -- WAD load */
 #if ORIGCODE
     numiwadlumps = numlumps;
 #endif
@@ -1396,6 +1411,7 @@ void D_DoomMain (void)
     D_IdentifyVersion();
     InitGameVersion();
     CHECKPOINT(13); /* D_IdentifyVersion()/InitGameVersion() done */
+    CHECKPOINT_VALUE(107, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after D_IdentifyVersion() */
 
 #if ORIGCODE
     //!
@@ -1772,10 +1788,12 @@ void D_DoomMain (void)
     DEH_printf("R_Init: Init DOOM refresh daemon - ");
     R_Init ();
     CHECKPOINT(14); /* R_Init() done */
+    CHECKPOINT_VALUE(108, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after R_Init() */
 
     DEH_printf("\nP_Init: Init Playloop state.\n");
     P_Init ();
     CHECKPOINT(15); /* P_Init() done */
+    CHECKPOINT_VALUE(109, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer after P_Init() */
 
     DEH_printf("S_Init: Setting up sound.\n");
     S_Init (sfxVolume * 8, musicVolume * 8);
@@ -1852,6 +1870,7 @@ void D_DoomMain (void)
     }
 
     CHECKPOINT(16); /* about to enter D_DoomLoop() -- the main game loop */
+    CHECKPOINT_VALUE(110, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* DG_ScreenBuffer right before D_DoomLoop() */
     D_DoomLoop ();
 }
 

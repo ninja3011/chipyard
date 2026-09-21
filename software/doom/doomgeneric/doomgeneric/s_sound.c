@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "checkpoint.h"
 #include "i_sound.h"
 #include "i_system.h"
 
@@ -124,12 +125,20 @@ void S_Init(int sfxVolume, int musicVolume)
     // (the maximum numer of sounds rendered
     // simultaneously) within zone memory.
     channels = Z_Malloc(snd_channels*sizeof(channel_t), PU_STATIC, 0);
+    CHECKPOINT_VALUE(116, (uint32_t)(uintptr_t)channels); /* channels pointer right after allocation in S_Init() */
 
     // Free all channels for use
     for (i=0 ; i<snd_channels ; i++)
     {
         channels[i].sfxinfo = 0;
     }
+    /* Brackets slot 116 (right after Z_Malloc) against this point (right
+     * after the init loop writes through the same pointer snd_channels
+     * times) -- if 119 differs from 116, something clobbered `channels`
+     * within S_Init() itself, before any other subsystem ever touches
+     * it. If 119 matches 116 but a later read (117/120 below) doesn't,
+     * the corruption happens sometime after S_Init() returns instead. */
+    CHECKPOINT_VALUE(119, (uint32_t)(uintptr_t)channels);
 
     // no sounds are playing, and they are not mus_paused
     mus_paused = 0;
@@ -510,6 +519,25 @@ void S_UpdateSounds(mobj_t *listener)
     sfxinfo_t*        sfx;
     channel_t*        c;
 
+    CHECKPOINT_VALUE(117, (uint32_t)(uintptr_t)channels); /* channels pointer at S_UpdateSounds entry -- overwritten every call, so this shows its value at (or just before) the crash */
+    {
+      /* One-time (guarded) capture of exactly which call first observes
+       * channels==NULL. A confirmed clean run showed channels start as a
+       * real, valid zone pointer right after Z_Malloc() in S_Init(), but
+       * read back as exactly 0 by crash time -- a clean got-zeroed
+       * signature, not random garbage. This tells us whether that
+       * happens almost immediately (a few tics -> likely a startup-path
+       * bug) or only after extensive unattended attract-mode looping
+       * (many thousands of tics -> likely an accumulation/overflow bug).
+       */
+      static uint32_t s_updateSoundsCallCount = 0;
+      static int s_loggedBadChannels = 0;
+      s_updateSoundsCallCount++;
+      if (!s_loggedBadChannels && channels == NULL) {
+        s_loggedBadChannels = 1;
+        CHECKPOINT_VALUE(118, s_updateSoundsCallCount);
+      }
+    }
     I_UpdateSound();
 
     for (cnum=0; cnum<snd_channels; cnum++)
