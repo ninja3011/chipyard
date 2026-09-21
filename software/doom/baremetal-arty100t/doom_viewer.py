@@ -7,6 +7,7 @@ Click the window and play:
   W/S  forward/back      A/D  turn left/right      ,/.  strafe left/right
   SPACE fire             E  use / open doors       R  run (hold)
   ENTER / ESC  menu      TAB  automap              1-7  weapons     Y/N  menu prompts
+  [ / ]  lower / higher resolution (160x100 .. 320x200)
 Keys are forwarded straight to the board over the same FT232R link that carries
 the picture (921600 baud). Hold a key: the terminal auto-repeat keeps it "down".
 """
@@ -21,7 +22,7 @@ RECORD = sys.argv[sys.argv.index("--record") + 1] if "--record" in sys.argv else
 BAUD = "921600"
 ROWS, COLS = 32, 64
 SCALE_X, SCALE_Y = 16, 20            # legacy 64x32 stream -> 1024x640 (DOOM's 16:10)
-SCALE3 = 6                           # 160x100 packet stream -> 960x600
+VIEW3 = (960, 600)                   # packet stream, any resolution -> 960x600 (DOOM is 16:10)
 
 KEYMAP = {"Return": b"\r", "Escape": b"\x1b", "Tab": b"\t", "space": b" ",
           "Up": b"w", "Down": b"s", "Left": b"a", "Right": b"d",
@@ -38,7 +39,7 @@ class Viewer:
         self.status = tk.StringVar(value=f"[{DEVICE}] connecting...")
         tk.Label(root, textvariable=self.status, bg="black", fg="#39ff14",
                  font=("monospace", 10), anchor="w").pack(fill="x")
-        tk.Label(root, text="WASD move/turn  ,/. strafe  SPACE fire  E use  R run  ENTER/ESC menu  TAB map  1-7 weapons",
+        tk.Label(root, text="WASD move/turn  ,/. strafe  SPACE fire  E use  R run  ENTER/ESC menu  TAB map  1-7 weapons  [ ] resolution",
                  bg="black", fg="#7fdaff", font=("monospace", 9), anchor="w").pack(fill="x")
         self.fd = None; self.buf = b""; self.frames = 0; self.t0 = time.time(); self.rec = open(RECORD, "wb") if RECORD else None
         self.tk_img = None; self.last_text = ""; self.dec = PacketDecoder(); self.shown = 0
@@ -74,13 +75,13 @@ class Viewer:
             frames = self.dec.feed(chunk_bytes)
             if frames:
                 arr = frames[-1][0]
-                im = Image.fromarray(arr, "RGB").resize((arr.shape[1] * SCALE3, arr.shape[0] * SCALE3), Image.NEAREST)
+                im = Image.fromarray(arr, "RGB").resize(VIEW3, Image.NEAREST)
                 self.tk_img = ImageTk.PhotoImage(im)
                 self.label.configure(image=self.tk_img)
                 self.frames += len(frames); self.shown += 1
                 st = self.dec.stats; dt = max(time.time() - self.t0, 1e-3)
                 tot = st["rows_ok"] + st["bad_packets"]
-                self.status.set(f"[{DEVICE}] frames={self.frames}  {self.frames / dt:.1f} fps   damaged packets {100 * st['bad_packets'] / max(tot, 1):.1f}%")
+                self.status.set(f"{arr.shape[1]}x{arr.shape[0]}   frames={self.frames}  {self.frames / dt:.1f} fps   damaged packets {100 * st['bad_packets'] / max(tot, 1):.1f}%   ( [ / ]  = lower / higher resolution )")
         if self.dec.stats["rows_ok"] == 0:
             # legacy 64x32 stream (ESC[H frames) -- only while no v3 packets have been seen
             self.buf += chunk_bytes

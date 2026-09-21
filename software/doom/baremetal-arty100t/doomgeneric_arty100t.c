@@ -121,18 +121,26 @@ static inline void sampleCellColor(int cx, int cy, char *c1, char *c2) {
 // viewer keeps that row from the previous frame) instead of a whole frame.
 //   packet  = D0 0D | type | body | s1 s2       (s1,s2 = Fletcher-16 over type+body)
 //   PALETTE : type 2, body = 768 bytes (DOOM's gamma-corrected r,g,b for indices 0..255)
-//   ROW     : type 1, body = row(1 byte) + BIN_COLS palette indices
-// The picture is DOOM's own 320x200 8-bit buffer (I_VideoBuffer) decimated 2:1
-// in both axes -> 160x100 exact palette indices, no color conversion.
+//   ROW     : type 1, body = mode(1) + row(1) + W palette indices (W,H from the mode table)
+// The picture is DOOM's own 320x200 8-bit buffer (I_VideoBuffer) sampled
+// down to the selected size: exact palette indices, no color conversion.
 extern unsigned char *I_VideoBuffer;
 extern unsigned char dg_palette[768];
 static void pumpUartRx(void);   /* defined with the input code below */
-#ifndef BIN_COLS
-#define BIN_COLS 160
-#define BIN_ROWS 100
-#endif
 #define SRC_W 320
 #define SRC_H 200
+// Selectable at runtime: the host sends '[' / ']' (never passed to the game) to step down / up.
+#define NMODES 5
+static const uint16_t kModeW[NMODES] = {160, 192, 224, 256, 320};
+static const uint16_t kModeH[NMODES] = {100, 120, 140, 160, 200};
+static int s_mode = 1;            // start at 192x120
+static int s_pendingMode = -1;    // applied at the next frame boundary
+static int s_modeReady = 0;
+static uint16_t s_xmap[SRC_W];    // source column for each output column, for the current mode
+static void setMode(int m) {
+  s_mode = m;
+  for (int x = 0; x < kModeW[m]; x++) s_xmap[x] = (uint16_t)((x * SRC_W) / kModeW[m]);
+}
 
 static uint32_t s_f1, s_f2;
 static inline void pktByte(uint8_t b) {
@@ -148,15 +156,19 @@ static inline void pktStart(uint8_t type) {
 static inline void pktEnd(void) { uart_putc((char)s_f1); uart_putc((char)s_f2); }
 
 static void palDrawFrame(void) {
+  if (!s_modeReady) { setMode(s_mode); s_modeReady = 1; }
+  if (s_pendingMode >= 0) { setMode(s_pendingMode); s_pendingMode = -1; }
+  const int W = kModeW[s_mode], H = kModeH[s_mode];
   pktStart(2);
   for (int i = 0; i < 768; i++) pktByte(dg_palette[i]);
   pktEnd();
   pumpUartRx();
-  for (int cy = 0; cy < BIN_ROWS; cy++) {
-    const unsigned char *src = I_VideoBuffer + (cy * SRC_H / BIN_ROWS) * SRC_W;
+  for (int cy = 0; cy < H; cy++) {
+    const unsigned char *src = I_VideoBuffer + ((cy * SRC_H) / H) * SRC_W;
     pktStart(1);
+    pktByte((uint8_t)s_mode);
     pktByte((uint8_t)cy);
-    for (int cx = 0; cx < BIN_COLS; cx++) pktByte(src[cx * SRC_W / BIN_COLS]);
+    for (int cx = 0; cx < W; cx++) pktByte(src[s_xmap[cx]]);
     pktEnd();
     pumpUartRx();   // keep the small RX FIFO drained while we are busy transmitting
   }
@@ -357,6 +369,13 @@ static void pumpUartRx(void) {
   while ((c = uart_getc_nonblock()) >= 0) {
     s_rawByteCount++;
     CHECKPOINT_VALUE(115, s_rawByteCount); /* cumulative RX byte count */
+#ifdef CONSOLE_PAL_VIDEO
+    if (c == '[' || c == ']') {           // resolution step, not a game key
+      int m = (s_pendingMode >= 0 ? s_pendingMode : s_mode) + (c == ']' ? 1 : -1);
+      if (m >= 0 && m < NMODES) s_pendingMode = m;
+      continue;
+    }
+#endif
     unsigned char dk = mapByteToDoomKey((unsigned char)c);
     if (dk == 0) continue;
     int slot = -1;

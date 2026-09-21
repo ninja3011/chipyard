@@ -1,8 +1,10 @@
-# Playing DOOM on the Arty (tag `doom-playable`)
+# Playing DOOM on the Arty (tags `doom-playable` = fixed 160x100, `doom-uart-final` = switchable resolution)
 
 RocketArty100TConfig bitstream, console over the FT232R on PMOD JA at 921600 baud.
-160x100 exact-palette video (I_VideoBuffer decimated 2:1), ~3.5 fps measured, ~5% of row packets damaged
-(dropped individually; the previous frame's row stays on screen).
+Exact-palette video sampled from DOOM's own 320x200 buffer, resolution switchable while playing:
+`]` / `[` step through 160x100, 192x120 (default), 224x140, 256x160, 320x200. Measured at 160x100: ~3.5 fps,
+~5% of row packets damaged (dropped individually; the previous frame's row stays on screen). Larger sizes trade
+frame rate for sharpness (estimates: 192x120 ~2.9 fps, 224x140 ~2.3, 256x160 ~1.8, 320x200 ~1.25).
 
 ## Build (from software/doom/baremetal-arty100t)
     export RISCV=<chipyard>/.conda-env/riscv-tools PATH=$RISCV/bin:$PATH; mkdir -p build_pal
@@ -20,7 +22,8 @@ image without a gate starts running while still loading (that is what broke DOOM
 
 ## Play (FT232R must be attached to WSL; close anything else reading the port)
     python3 doom_viewer.py /dev/ttyUSB2 [--record session.log]
-W/S move, A/D turn, `,` `.` strafe, SPACE fire, E use, R run, ENTER/ESC menu, TAB map, 1-7 weapons, Y/N prompts.
+W/S move, A/D turn, `,` `.` strafe, SPACE fire, E use, R run, ENTER/ESC menu, TAB map, 1-7 weapons, Y/N prompts,
+`[` `]` lower/higher resolution.
 A key stays "down" 220 ms after its last byte, so terminal auto-repeat gives held movement.
 
 ## Files

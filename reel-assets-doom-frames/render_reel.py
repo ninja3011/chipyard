@@ -51,7 +51,7 @@ def main(log, out, max_frames=1000, fps=25):
     f_mid = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 34)
     f_sm = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 28)
     bg = (11, 13, 18)
-    view_w, view_h = (960, 600) if frames and frames[0].shape[1] == 160 else (1024, 640)   # DOOM is 16:10
+    view_w, view_h = (960, 600) if frames and frames[0].shape[1] >= 160 else (1024, 640)   # DOOM is 16:10
     vx, vy = (W - view_w) // 2, 520
     for k, arr in enumerate(frames):
         cv = Image.new('RGB', (W, H), bg)
