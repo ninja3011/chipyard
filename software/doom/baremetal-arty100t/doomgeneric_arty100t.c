@@ -90,6 +90,30 @@ static inline uint8_t sampleLuma(int srcX, int srcY) {
   return (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
 }
 
+
+#ifdef CONSOLE_COLOR_VIDEO
+// Color protocol v2: every cell is TWO characters carrying 12-bit RGB444
+// (R4 G4 B4). v = (r<<8)|(g<<4)|b; c1 = 0x40 + (v>>6), c2 = 0x40 + (v&0x3f),
+// so both are in 0x40..0x7f -- never ESC/CR/LF, so the frame framing
+// (ESC[H, then ASCII_ROWS lines ending \r\n) is unchanged and unambiguous.
+// The cell color is a box average of the source pixels under the cell
+// (every 2nd pixel in x, every 3rd in y), not a single point sample.
+static inline void sampleCellColor(int cx, int cy, char *c1, char *c2) {
+  int x0 = (cx * DOOMGENERIC_RESX) / ASCII_COLS, x1 = ((cx + 1) * DOOMGENERIC_RESX) / ASCII_COLS;
+  int y0 = (cy * DOOMGENERIC_RESY) / ASCII_ROWS, y1 = ((cy + 1) * DOOMGENERIC_RESY) / ASCII_ROWS;
+  uint32_t sr = 0, sg = 0, sb = 0, n = 0;
+  for (int y = y0; y < y1; y += 3) {
+    for (int x = x0; x < x1; x += 2) {
+      uint32_t px = DG_ScreenBuffer[y * DOOMGENERIC_RESX + x];
+      sb += (px >> 0) & 0xff; sg += (px >> 8) & 0xff; sr += (px >> 16) & 0xff; n++;
+    }
+  }
+  uint32_t v = (((sr / n) >> 4) << 8) | (((sg / n) >> 4) << 4) | ((sb / n) >> 4);
+  *c1 = (char)(0x40 + (v >> 6));
+  *c2 = (char)(0x40 + (v & 0x3f));
+}
+#endif
+
 #endif // CONSOLE_ASCII_VIDEO
 
 // mtime tick rate: confirmed (not assumed) from this exact config's own
@@ -146,13 +170,34 @@ static unsigned char mapByteToDoomKey(unsigned char c) {
     case 's': case 'S': return KEY_DOWNARROW;
     case 'a': case 'A': return KEY_LEFTARROW;
     case 'd': case 'D': return KEY_RIGHTARROW;
+    case ',':           return KEY_STRAFE_L;
+    case '.':           return KEY_STRAFE_R;
     case ' ':           return KEY_FIRE;
     case 'e': case 'E': return KEY_USE;
+    case 'r': case 'R': return KEY_RSHIFT;   // run
+    case 9:              return KEY_TAB;      // automap
     case 13: case 10:   return KEY_ENTER;
     case 27:             return KEY_ESCAPE;
-    default:             return 0;
+    default:
+      if (c >= '0' && c <= '9') return c;     // weapon select, menu numbers
+      if (c == 'y' || c == 'Y') return 'y';   // menu confirmations
+      if (c == 'n' || c == 'N') return 'n';
+      return 0;
   }
 }
+
+// A serial link has no key-up. Each received byte (re-sent by the terminal's
+// auto-repeat while a key is held) keeps that key "down" for HOLD_MS after the
+// LAST byte, then a release is synthesized. The previous version queued a
+// press AND a release for every byte, which DOOM sees in the same tic, so
+// held-state movement never registered.
+#define HOLD_MS 220
+#define MAX_DOWN 8
+static unsigned char s_downKey[MAX_DOWN];
+static uint32_t s_downUntil[MAX_DOWN];
+static unsigned char s_isDown[MAX_DOWN];
+
+static void pumpUartRx(void);
 
 void DG_Init(void) {
   uart_init();
@@ -208,8 +253,22 @@ void DG_DrawFrame(void) {
   // while the console only shows what the link can actually carry.
   static int frameCounter = 0;
   CHECKPOINT_VALUE(101, (uint32_t)(uintptr_t)DG_ScreenBuffer); /* pointer value at DG_DrawFrame entry -- compare against slot 100 (right after malloc) to tell a NULL-from-the-start malloc failure apart from later corruption */
-  if ((frameCounter++ % 3) != 0) return;
+#ifndef FRAME_EVERY
+#define FRAME_EVERY 3
+#endif
+  if ((frameCounter++ % FRAME_EVERY) != 0) return;
 
+#ifdef CONSOLE_COLOR_VIDEO
+  static char crow[ASCII_COLS * 2 + 3];
+  uart_puts("\033[H");
+  for (int cy = 0; cy < ASCII_ROWS; cy++) {
+    for (int cx = 0; cx < ASCII_COLS; cx++) sampleCellColor(cx, cy, &crow[2 * cx], &crow[2 * cx + 1]);
+    crow[ASCII_COLS * 2] = '\r'; crow[ASCII_COLS * 2 + 1] = '\n'; crow[ASCII_COLS * 2 + 2] = '\0';
+    uart_puts(crow);
+    pumpUartRx(); // keep the small RX FIFO drained while we spend time transmitting
+  }
+  return;
+#endif
   char line[ASCII_COLS + 3]; // + \r \n \0
   uart_puts("\033[H"); // cursor home, no clear -- avoids full-screen flicker
   for (int cy = 0; cy < ASCII_ROWS; cy++) {
@@ -240,18 +299,32 @@ uint32_t DG_GetTicksMs(void) {
 
 static uint32_t s_rawByteCount = 0; /* every byte ever seen on RX, mapped or not -- tests whether the idle/unattended RX line is producing phantom bytes (electrical noise, no real keyboard attached) that could be injecting random input and explaining why otherwise-identical runs crash at different code paths */
 
-int DG_GetKey(int *pressed, unsigned char *doomKey) {
-  // Drain any new raw bytes into press+release event pairs first.
+static void pumpUartRx(void) {
+  uint32_t now = DG_GetTicksMs();
   int c;
   while ((c = uart_getc_nonblock()) >= 0) {
     s_rawByteCount++;
-    CHECKPOINT_VALUE(115, s_rawByteCount); /* cumulative RX byte count -- overwritten every call, so this is the latest total at (or near) crash time */
+    CHECKPOINT_VALUE(115, s_rawByteCount); /* cumulative RX byte count */
     unsigned char dk = mapByteToDoomKey((unsigned char)c);
     if (dk == 0) continue;
+    int slot = -1;
+    for (int i = 0; i < MAX_DOWN; i++) if (s_isDown[i] && s_downKey[i] == dk) { slot = i; break; }
+    if (slot >= 0) { s_downUntil[slot] = now + HOLD_MS; continue; }   // already down: extend
+    for (int i = 0; i < MAX_DOWN; i++) if (!s_isDown[i]) { slot = i; break; }
+    if (slot < 0) continue;                                            // too many keys at once
+    s_isDown[slot] = 1; s_downKey[slot] = dk; s_downUntil[slot] = now + HOLD_MS;
     pushKeyEvent(1, dk);
-    pushKeyEvent(0, dk);
   }
+  for (int i = 0; i < MAX_DOWN; i++) {
+    if (s_isDown[i] && (int32_t)(now - s_downUntil[i]) >= 0) {
+      s_isDown[i] = 0;
+      pushKeyEvent(0, s_downKey[i]);
+    }
+  }
+}
 
+int DG_GetKey(int *pressed, unsigned char *doomKey) {
+  pumpUartRx();
   if (s_keyQueueHead == s_keyQueueTail) return 0;
   unsigned short ev = s_keyQueue[s_keyQueueHead];
   s_keyQueueHead = (s_keyQueueHead + 1) % KEYQUEUE_SIZE;

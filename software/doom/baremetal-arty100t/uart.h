@@ -41,9 +41,15 @@ static inline uint32_t uart_reg_read(uint32_t off) {
 
 /* div = (f_clk / baud) - 1. 50MHz / 115200 - 1 = 433 (rounded). */
 #define UART_DIV_115200 433
+/* 50MHz / 921600 - 1 = 53.25 -> 53 (0.46% fast; fine for the FT232R) */
+#define UART_DIV_921600 53
+/* Console baud: default 115200; build with -DUART_CONSOLE_DIV=53 for 921600 */
+#ifndef UART_CONSOLE_DIV
+#define UART_CONSOLE_DIV UART_DIV_115200
+#endif
 
 static inline void uart_init(void) {
-  uart_reg_write(UART_REG_DIV, UART_DIV_115200);
+  uart_reg_write(UART_REG_DIV, UART_CONSOLE_DIV);
   uart_reg_write(UART_REG_TXCTRL, UART_TXCTRL_TXEN);
   uart_reg_write(UART_REG_RXCTRL, UART_RXCTRL_RXEN);
 }
