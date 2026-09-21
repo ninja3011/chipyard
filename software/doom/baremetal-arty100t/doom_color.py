@@ -51,6 +51,91 @@ def encode_cell(r8, g8, b8):
     v = ((r8 >> 4) << 8) | ((g8 >> 4) << 4) | (b8 >> 4)
     return bytes([0x40 + (v >> 6), 0x40 + (v & 0x3f)])
 
+
+# ---------------------------------------------------------------------------
+# Protocol v3: palette + checksummed row packets (160x100, exact DOOM colors)
+#   packet = D0 0D | type | body | s1 s2      (Fletcher-16 over type+body)
+#   PALETTE type 2: 768 bytes r,g,b x 256      ROW type 1: row(1) + 160 palette indices
+# A damaged packet is dropped on its own; the previous frame's row stays visible.
+# ---------------------------------------------------------------------------
+MAGIC = b"\xd0\x0d"
+COLS3, ROWS3 = 160, 100
+ROW_LEN = 2 + 1 + 1 + COLS3 + 2
+PAL_LEN = 2 + 1 + 768 + 2
+
+def fletcher16(data):
+    s1 = s2 = 0
+    for b in data:
+        s1 = (s1 + b) % 255
+        s2 = (s2 + s1) % 255
+    return s1, s2
+
+class PacketDecoder:
+    def __init__(self):
+        self.buf = bytearray()
+        g = np.arange(256, dtype=np.uint8)
+        self.palette = np.stack([g, g, g], axis=-1)
+        self.idx = np.zeros((ROWS3, COLS3), np.uint8)
+        self.frame_rows = set()
+        self.stats = dict(rows_ok=0, pal_ok=0, bad_packets=0, frames=0, frames_complete=0)
+
+    def feed(self, data):
+        """Consume bytes; return a list of (rgb_array[100,160,3], complete_bool) for every
+        frame finished by this data (a frame ends when its last row arrives)."""
+        self.buf += data
+        b, i, out = self.buf, 0, []
+        while True:
+            j = b.find(MAGIC, i)
+            if j < 0:
+                i = max(i, len(b) - 1)               # keep 1 byte: the magic may be split across reads
+                break
+            if len(b) - j < 3:
+                i = j; break
+            t = b[j + 2]
+            L = ROW_LEN if t == 1 else PAL_LEN if t == 2 else 0
+            if L == 0:
+                i = j + 1; continue
+            if len(b) - j < L:
+                i = j; break                          # wait for the rest of this packet
+            body = bytes(b[j + 2: j + L - 2])
+            if fletcher16(body) != (b[j + L - 2], b[j + L - 1]):
+                self.stats["bad_packets"] += 1
+                i = j + 1; continue
+            i = j + L
+            if t == 2:
+                self.palette = np.frombuffer(body[1:769], np.uint8).reshape(256, 3).copy()
+                self.stats["pal_ok"] += 1
+                self.frame_rows = set()
+            else:
+                row = body[1]
+                if row < ROWS3:
+                    self.idx[row] = np.frombuffer(body[2:2 + COLS3], np.uint8)
+                    self.frame_rows.add(row)
+                    self.stats["rows_ok"] += 1
+                    if row == ROWS3 - 1:
+                        complete = len(self.frame_rows) == ROWS3
+                        self.stats["frames"] += 1
+                        self.stats["frames_complete"] += int(complete)
+                        out.append((self.palette[self.idx].copy(), complete))
+        del b[:i]
+        return out
+
+def _encode_stream(frames_idx, palette, corrupt_row=None):
+    """Reference encoder mirroring the C firmware -- used by the self-test."""
+    def pkt(t, body):
+        s1 = s2 = 0
+        for x in bytes([t]) + body:
+            s1 = (s1 + x) % 255; s2 = (s2 + s1) % 255
+        return MAGIC + bytes([t]) + body + bytes([s1, s2])
+    out = b""
+    for f in frames_idx:
+        out += pkt(2, palette.tobytes())
+        for r in range(ROWS3):
+            p = bytearray(pkt(1, bytes([r]) + f[r].tobytes()))
+            if corrupt_row == r: p[20] ^= 0x55
+            out += bytes(p)
+    return out
+
 if __name__ == "__main__":        # round-trip self-test of the protocol
     import random
     rows, cols = 32, 64
@@ -60,3 +145,13 @@ if __name__ == "__main__":        # round-trip self-test of the protocol
     assert dec is not None and np.abs(dec.astype(int) - (img.astype(int) >> 4 << 4) - 0).max() <= 15
     assert parse_frame(raw[:-40], rows, cols) is None               # torn frame rejected
     print("protocol round-trip OK (max quantization error 15/255 per channel)")
+    # ---- v3 ----
+    pal = np.array([[random.randrange(256) for _ in range(3)] for _ in range(256)], np.uint8)
+    frames = [np.array([[random.randrange(256) for _ in range(COLS3)] for _ in range(ROWS3)], np.uint8) for _ in range(3)]
+    dec = PacketDecoder(); stream = _encode_stream(frames, pal); got = []
+    for k in range(0, len(stream), 97):
+        got += dec.feed(stream[k:k + 97])
+    assert len(got) == 3 and all(c for _, c in got) and (got[1][0] == pal[frames[1]]).all()
+    dec2 = PacketDecoder(); g2 = dec2.feed(_encode_stream(frames[:1], pal, corrupt_row=50))
+    assert len(g2) == 1 and not g2[0][1] and dec2.stats["bad_packets"] == 1 and dec2.stats["rows_ok"] == 99
+    print("v3 packet decoder OK: 3/3 frames intact; one corrupted row rejected alone, other 99 rows kept")

@@ -14,13 +14,14 @@ import os, subprocess, sys, time
 import tkinter as tk
 import numpy as np
 from PIL import Image, ImageTk
-from doom_color import parse_frame, FRAME_MARKER
+from doom_color import parse_frame, FRAME_MARKER, PacketDecoder
 
 DEVICE = next((a for a in sys.argv[1:] if a.startswith("/dev/")), "/dev/ttyUSB2")
 RECORD = sys.argv[sys.argv.index("--record") + 1] if "--record" in sys.argv else None
 BAUD = "921600"
 ROWS, COLS = 32, 64
-SCALE_X, SCALE_Y = 16, 20            # 64x32 cells -> 1024x640 (DOOM's 16:10)
+SCALE_X, SCALE_Y = 16, 20            # legacy 64x32 stream -> 1024x640 (DOOM's 16:10)
+SCALE3 = 6                           # 160x100 packet stream -> 960x600
 
 KEYMAP = {"Return": b"\r", "Escape": b"\x1b", "Tab": b"\t", "space": b" ",
           "Up": b"w", "Down": b"s", "Left": b"a", "Right": b"d",
@@ -40,7 +41,7 @@ class Viewer:
         tk.Label(root, text="WASD move/turn  ,/. strafe  SPACE fire  E use  R run  ENTER/ESC menu  TAB map  1-7 weapons",
                  bg="black", fg="#7fdaff", font=("monospace", 9), anchor="w").pack(fill="x")
         self.fd = None; self.buf = b""; self.frames = 0; self.t0 = time.time(); self.rec = open(RECORD, "wb") if RECORD else None
-        self.tk_img = None; self.last_text = ""
+        self.tk_img = None; self.last_text = ""; self.dec = PacketDecoder(); self.shown = 0
         root.bind("<KeyPress>", self.on_key); root.focus_set()
         root.after(10, self.connect)
 
@@ -61,35 +62,49 @@ class Viewer:
             except OSError: pass
 
     def poll(self):
+        chunk_bytes = b""
         try:
-            chunk = os.read(self.fd, 1 << 16)
-            if chunk:
-                self.buf += chunk
-                if self.rec: self.rec.write(chunk); self.rec.flush()
+            chunk_bytes = os.read(self.fd, 1 << 16)
+            if chunk_bytes and self.rec:
+                self.rec.write(chunk_bytes); self.rec.flush()
         except BlockingIOError:
             pass
-        if len(self.buf) > 1 << 20:
-            self.buf = self.buf[-(1 << 16):]
-        parts = self.buf.split(FRAME_MARKER)
-        if len(parts) > 2:
-            # boot text is whatever precedes the first marker; keep the last non-empty line
-            pre = parts[0].decode("ascii", "replace").replace("\r", "").strip().split("\n")
-            if pre and pre[-1]: self.last_text = pre[-1][:90]
-            latest = None
-            for raw in parts[1:-1]:
-                fr = parse_frame(raw, ROWS, COLS)
-                if fr is not None:
-                    latest = fr; self.frames += 1
-            self.buf = FRAME_MARKER + parts[-1]
-            if latest is not None:
-                im = Image.fromarray(latest, "RGB").resize((COLS * SCALE_X, ROWS * SCALE_Y), Image.NEAREST)
+        if chunk_bytes:
+            # v3: palette + checksummed row packets (160x100). Damaged rows are dropped alone.
+            frames = self.dec.feed(chunk_bytes)
+            if frames:
+                arr = frames[-1][0]
+                im = Image.fromarray(arr, "RGB").resize((arr.shape[1] * SCALE3, arr.shape[0] * SCALE3), Image.NEAREST)
                 self.tk_img = ImageTk.PhotoImage(im)
                 self.label.configure(image=self.tk_img)
-                dt = max(time.time() - self.t0, 1e-3)
-                self.status.set(f"[{DEVICE}] frames={self.frames}  avg {self.frames / dt:.1f} fps")
-        elif not self.frames:
-            txt = self.buf.decode("ascii", "replace").replace("\r", "").strip().split("\n")
-            if txt and txt[-1].strip(): self.status.set(f"[{DEVICE}] {txt[-1][:100]}")
+                self.frames += len(frames); self.shown += 1
+                st = self.dec.stats; dt = max(time.time() - self.t0, 1e-3)
+                tot = st["rows_ok"] + st["bad_packets"]
+                self.status.set(f"[{DEVICE}] frames={self.frames}  {self.frames / dt:.1f} fps   damaged packets {100 * st['bad_packets'] / max(tot, 1):.1f}%")
+        if self.dec.stats["rows_ok"] == 0:
+            # legacy 64x32 stream (ESC[H frames) -- only while no v3 packets have been seen
+            self.buf += chunk_bytes
+            if len(self.buf) > 1 << 20:
+                self.buf = self.buf[-(1 << 16):]
+            parts = self.buf.split(FRAME_MARKER)
+            if len(parts) > 2:
+                latest = None
+                for raw in parts[1:-1]:
+                    fr = parse_frame(raw, ROWS, COLS)
+                    if fr is not None:
+                        latest = fr; self.frames += 1
+                self.buf = FRAME_MARKER + parts[-1]
+                if latest is not None:
+                    im = Image.fromarray(latest, "RGB").resize((COLS * SCALE_X, ROWS * SCALE_Y), Image.NEAREST)
+                    self.tk_img = ImageTk.PhotoImage(im)
+                    self.label.configure(image=self.tk_img)
+                    dt = max(time.time() - self.t0, 1e-3)
+                    self.status.set(f"[{DEVICE}] frames={self.frames}  avg {self.frames / dt:.1f} fps (legacy 64x32)")
+            elif not self.frames:
+                txt = self.buf.decode("ascii", "replace").replace("\r", "").strip().split("\n")
+                if txt and txt[-1].strip(): self.status.set(f"[{DEVICE}] {txt[-1][:100]}")
+        else:
+            self.buf = b""
         self.root.after(15, self.poll)
 
 def main():

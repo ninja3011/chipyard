@@ -114,6 +114,54 @@ static inline void sampleCellColor(int cx, int cy, char *c1, char *c2) {
 }
 #endif
 
+
+#ifdef CONSOLE_PAL_VIDEO
+// Video protocol v3 (palette + checksummed row packets). Each frame is a PALETTE
+// packet followed by BIN_ROWS ROW packets, so a wire error costs one row (the
+// viewer keeps that row from the previous frame) instead of a whole frame.
+//   packet  = D0 0D | type | body | s1 s2       (s1,s2 = Fletcher-16 over type+body)
+//   PALETTE : type 2, body = 768 bytes (DOOM's gamma-corrected r,g,b for indices 0..255)
+//   ROW     : type 1, body = row(1 byte) + BIN_COLS palette indices
+// The picture is DOOM's own 320x200 8-bit buffer (I_VideoBuffer) decimated 2:1
+// in both axes -> 160x100 exact palette indices, no color conversion.
+extern unsigned char *I_VideoBuffer;
+extern unsigned char dg_palette[768];
+static void pumpUartRx(void);   /* defined with the input code below */
+#ifndef BIN_COLS
+#define BIN_COLS 160
+#define BIN_ROWS 100
+#endif
+#define SRC_W 320
+#define SRC_H 200
+
+static uint32_t s_f1, s_f2;
+static inline void pktByte(uint8_t b) {
+  s_f1 += b; if (s_f1 >= 255) s_f1 -= 255;
+  s_f2 += s_f1; if (s_f2 >= 255) s_f2 -= 255;
+  uart_putc((char)b);
+}
+static inline void pktStart(uint8_t type) {
+  uart_putc((char)0xD0); uart_putc((char)0x0D);
+  s_f1 = 0; s_f2 = 0;
+  pktByte(type);
+}
+static inline void pktEnd(void) { uart_putc((char)s_f1); uart_putc((char)s_f2); }
+
+static void palDrawFrame(void) {
+  pktStart(2);
+  for (int i = 0; i < 768; i++) pktByte(dg_palette[i]);
+  pktEnd();
+  pumpUartRx();
+  for (int cy = 0; cy < BIN_ROWS; cy++) {
+    const unsigned char *src = I_VideoBuffer + (cy * SRC_H / BIN_ROWS) * SRC_W;
+    pktStart(1);
+    pktByte((uint8_t)cy);
+    for (int cx = 0; cx < BIN_COLS; cx++) pktByte(src[cx * SRC_W / BIN_COLS]);
+    pktEnd();
+    pumpUartRx();   // keep the small RX FIFO drained while we are busy transmitting
+  }
+}
+#endif // CONSOLE_PAL_VIDEO
 #endif // CONSOLE_ASCII_VIDEO
 
 // mtime tick rate: confirmed (not assumed) from this exact config's own
@@ -258,6 +306,10 @@ void DG_DrawFrame(void) {
 #endif
   if ((frameCounter++ % FRAME_EVERY) != 0) return;
 
+#ifdef CONSOLE_PAL_VIDEO
+  palDrawFrame();
+  return;
+#endif
 #ifdef CONSOLE_COLOR_VIDEO
   static char crow[ASCII_COLS * 2 + 3];
   uart_puts("\033[H");

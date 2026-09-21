@@ -90,6 +90,10 @@ static struct color colors[256];
 #endif  // CMAP256
 
 
+/* Gamma-corrected RGB palette (256 x r,g,b) as last set by I_SetPalette, for
+ * backends that send palette indices instead of converted pixels. */
+byte dg_palette[768];
+
 void I_GetEvent(void);
 
 // The screen buffer; this is modified to draw things to the screen
@@ -320,6 +324,7 @@ void I_UpdateNoBlit (void)
 
 void I_FinishUpdate (void)
 {
+#ifndef DG_SKIP_FB_CONVERT
     int y;
     int x_offset, y_offset, x_offset_end;
     unsigned char *line_in, *line_out;
@@ -366,6 +371,7 @@ void I_FinishUpdate (void)
         line_in += SCREENWIDTH;
     }
 
+#endif /* DG_SKIP_FB_CONVERT */
 	DG_DrawFrame();
 }
 
@@ -410,6 +416,9 @@ void I_SetPalette (byte* palette)
         colors[i].r = gammatable[usegamma][*palette++];
         colors[i].g = gammatable[usegamma][*palette++];
         colors[i].b = gammatable[usegamma][*palette++];
+        dg_palette[i * 3 + 0] = (byte)colors[i].r;
+        dg_palette[i * 3 + 1] = (byte)colors[i].g;
+        dg_palette[i * 3 + 2] = (byte)colors[i].b;
     }
 
 #ifdef CMAP256
