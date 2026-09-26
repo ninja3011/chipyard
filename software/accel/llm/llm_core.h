@@ -355,4 +355,44 @@ static void decode_token(const Model *m, int prev, int tok, emit_fn emit) {
   }
   emit(p, n);
 }
+
+// ---- Clean-ending generation -------------------------------------------------
+// Greedy decoding of a model fine-tuned on a short text has no learned "stop"
+// (an EOS target was tried and is not learnable through this rank-8 last-layer
+// adapter), so it loops after the memorized text. Instead: buffer tokens one
+// SENTENCE at a time, print a sentence only once it is complete, and stop at
+// the first sentence identical to one already printed, at EOS, or once
+// max_tokens is reached (finishing the current sentence first, hard cap 2x).
+#define GEN_MAXTOK 512
+static int piece_ends_sentence(const Model *m, int tok) {
+  int n = (int)(m->tok_off[tok + 1] - m->tok_off[tok]);
+  if (n <= 0) return 0;
+  char c = m->tok_data[m->tok_off[tok] + n - 1];
+  return c == '.' || c == '!' || c == '?';
+}
+static void gen_sentences(const Model *m, int max_tokens, emit_fn emit) {
+  static int all[GEN_MAXTOK];          /* tokens of every sentence already printed */
+  static int starts[GEN_MAXTOK / 2];   /* start index of each printed sentence */
+  int nall = 0, nsent = 0, tok = 1, prev = 1, cur = 0, pos = 0;
+  int sent[GEN_MAXTOK]; int sent_prev[GEN_MAXTOK];
+  for (;;) {
+    forward(m, tok, pos++); prev = tok; tok = argmax_logits();
+    if (tok == 1 || tok == 2) break;
+    sent[cur] = tok; sent_prev[cur] = prev; cur++;
+    int end = piece_ends_sentence(m, tok);
+    if (end || pos >= 2 * max_tokens || cur >= GEN_MAXTOK / 2) {
+      int dup = 0;
+      for (int k = 0; k < nsent && !dup; k++) {
+        int a = starts[k], b = (k + 1 < nsent ? starts[k + 1] : nall);
+        if (b - a == cur) { dup = 1; for (int i = 0; i < cur; i++) if (all[a + i] != sent[i]) { dup = 0; break; } }
+      }
+      if (dup) break;
+      for (int i = 0; i < cur; i++) { decode_token(m, sent_prev[i], sent[i], emit); all[nall++] = sent[i]; }
+      starts[nsent++] = nall - cur; cur = 0;
+      if (pos >= max_tokens || nall + 2 >= GEN_MAXTOK) break;
+    }
+    if (pos >= 2 * max_tokens) break;
+  }
+  emit("\n", 1);
+}
 #endif

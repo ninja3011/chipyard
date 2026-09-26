@@ -172,3 +172,10 @@ class RocketArty100TInt8Config extends Config(
   new WithArty100TTweaks ++
   new chipyard.config.WithBroadcastManager ++ // no l2
   new chipyard.RocketConfig)
+
+// Rocket + the systolic-array INT8 tile engine (chipyard.accel.SystolicTileEngine).
+class RocketArty100TSystolicConfig extends Config(
+  new chipyard.accel.WithSystolicTileEngine ++
+  new WithArty100TTweaks ++
+  new chipyard.config.WithBroadcastManager ++ // no l2
+  new chipyard.RocketConfig)

@@ -15,3 +15,4 @@ llm/llm_core_pad.h
 llm/llm_core_mis.h
 llm/llm_dbg5.c
 __pycache__/
+build_g/

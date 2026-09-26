@@ -10,3 +10,10 @@ class RocketInt8AccelSimConfig extends Config(
   new chipyard.harness.WithHarnessBinderClockFreqMHz(50) ++
   new chipyard.config.WithUniformBusFrequencies(50) ++
   new chipyard.RocketConfig)
+
+// Same as RocketInt8AccelSimConfig but with the systolic-array engine.
+class RocketSystolicAccelSimConfig extends Config(
+  new WithSystolicTileEngine ++
+  new chipyard.harness.WithHarnessBinderClockFreqMHz(50) ++
+  new chipyard.config.WithUniformBusFrequencies(50) ++
+  new chipyard.RocketConfig)

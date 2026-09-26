@@ -70,3 +70,21 @@ junk tokens appear); the final text has none. Rare names ("Ninad") are also hard
 | start gate + sentinel hole (`...-gated.elf`) | same, 433+ frames / 5+ minutes, no traps |
 So the load barrier (core running while `uart_tsi` is still streaming the ELF) is what broke DOOM's startup; the
 sentinel words only mattered for images where they land in executed code (the LLM programs).
+
+## Interactive chat over serial + on-chip learning (2026-09-26)
+`llm/llm_chat.h` (platform-independent) + `llm_chat_arty.c` (UART wrapper) + `llm_chat_host.c` (PC harness).
+On the board (FT232R console, 115200): type a prompt, the 15M model continues it; `/train [epochs] <text>` LoRA-fine-tunes
+on the chip; `/base` `/tuned` `/reset` `/temp` `/len`. Tokenizing is done ON the chip (BPE with a hash table; merge scores
+are a new last section of the blob, `tok_scores`). Verified on the real board:
+* prompt "Once upon a time, there was a little dog named Max." -> coherent continuation, 14 prompt tokens (matches the Python encoder), 1.5 tok/s
+* `/train 12 The robot named Arty lived on a tiny green board.` -> loss 6.22 -> 0.0004 in 12 epochs (about 26 s/epoch), then the
+  prompt "The robot named" gives "Arty lived on a tiny green board." (adapter off: "one day, it was very hot outside.")
+Renderings of the real captured logs: `results/screens/`. Type into the console with `tools/chip_say.py "text"`.
+Tools: `tools/fresh_load.sh` (reprogram + load + capture), `tools/build_bitstream.sh` (Windows Vivado pipeline),
+`tools/test_engine_on_board.sh` (self-test, GEMM test, stress tests on the board).
+
+## Systolic-array engine (`SystolicTileEngine.scala`)
+Same RoCC ISA (software unchanged); only the multiply stage is replaced by an output-stationary 8x8 grid of PEs with
+neighbour-to-neighbour data flow and skewed injection (fan-out 1 instead of 8). Configs: `RocketSystolicAccelSimConfig`,
+`RocketArty100TSystolicConfig`. RTL simulation: `accel_test` ALL PASS (117 vs 104 cycles per tile: the skew adds ~12 cycles of
+latency), `gemm_test` all four transpose modes ok. Hardware status: see the bottom of this file.

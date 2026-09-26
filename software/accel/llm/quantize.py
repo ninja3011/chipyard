@@ -66,7 +66,7 @@ def read_tokenizer(path):
 
 def main(model, tok, out):
     cfg, w = read_model(model)
-    toks, _ = read_tokenizer(tok)
+    toks, tok_scores = read_tokenizer(tok)
     assert len(toks) == cfg['vocab'], (len(toks), cfg['vocab'])
     dim, hid, nl = cfg['dim'], cfg['hidden'], cfg['layers']
     hid_p = pad8(hid); kvd = cfg['kv_heads'] * (dim // cfg['heads'])
@@ -87,6 +87,8 @@ def main(model, tok, out):
             ('w2', dim, dim, hid, hid_p)]:
         qs, ss = zip(*[quant_rows(w[name][l], rows_p, k_p) for l in range(nl)])
         add(name + '_q', np.stack(qs)); add(name + '_s', np.stack(ss))
+    # appended LAST so every earlier section index is unchanged (BPE merge scores for on-chip tokenizing)
+    add('tok_scores', np.array(tok_scores, dtype=np.float32))
 
     header_words = 16
     table_words = 2 * len(sections)  # (offset, size) per section

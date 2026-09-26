@@ -22,3 +22,4 @@
 #define SEC_W3_S 20
 #define SEC_W2_Q 21
 #define SEC_W2_S 22
+#define SEC_TOK_SCORES 23
