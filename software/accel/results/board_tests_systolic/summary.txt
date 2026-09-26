@@ -1,0 +1,5 @@
+selftest: engine cycles (load+mac+store): 117 [accel_test] ALL PASS 
+gemm: 00 ok 1893cyc 10 ok 1655cyc 01 ok 1660cyc 11 ok 1653cyc i8 ok sw 141406cyc [gemm] ALL PASS 
+stress_eng (90 s): iterations=4121 mismatches=0
+stress_llm (90 s): iterations=4206 mismatches=0
+DONE

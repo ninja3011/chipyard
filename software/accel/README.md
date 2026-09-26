@@ -88,3 +88,15 @@ Same RoCC ISA (software unchanged); only the multiply stage is replaced by an ou
 neighbour-to-neighbour data flow and skewed injection (fan-out 1 instead of 8). Configs: `RocketSystolicAccelSimConfig`,
 `RocketArty100TSystolicConfig`. RTL simulation: `accel_test` ALL PASS (117 vs 104 cycles per tile: the skew adds ~12 cycles of
 latency), `gemm_test` all four transpose modes ok. Hardware status: see the bottom of this file.
+
+### Systolic engine: hardware results (2026-09-26)
+Bitstream `RocketArty100TSystolicConfig` built with Vivado: **all timing constraints met** (setup WNS +0.053 ns, hold WHS +0.053 ns,
+0 failing endpoints; the older broadcast-engine bitstream had a -0.020 ns hold violation in the debug module). On the board:
+* engine self-test ALL PASS (117 cycles per load+multiply+store tile vs 104 for the broadcast engine)
+* tiled GEMM test ALL PASS (all four transpose modes + int8 output)
+* stress: 4,121 GEMM iterations and 4,206 full 260K-LLM forward passes in 90 s, 0 mismatches (bit-identical to software)
+* chat: 15M model at 1.4-1.5 tok/s (broadcast engine: 1.5-1.7 tok/s); `/train` LoRA works (loss 6.22 -> 0.0100 in 8 epochs, 26.9 s/epoch);
+  the tuned model completes "The robot named" with "Arty lived on a tiny green board."
+Honest takeaway: the systolic array is functionally equivalent and cleaner for timing, but ~10% SLOWER here, because each tile pays
+an extra ~12 cycles of skew latency while memory traffic (not the multiplier layout) is the bottleneck. Its advantage is that it scales
+(fan-out 1, neighbour-only wires) once loads are overlapped with compute. Raw logs: `results/board_tests_systolic/`, renders: `results/screens/`.
