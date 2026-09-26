@@ -16,3 +16,6 @@ llm/llm_core_mis.h
 llm/llm_dbg5.c
 __pycache__/
 build_g/
+smol/hf/
+smol/*.bin
+smol/*.elf

@@ -17,3 +17,10 @@ class RocketSystolicAccelSimConfig extends Config(
   new chipyard.harness.WithHarnessBinderClockFreqMHz(50) ++
   new chipyard.config.WithUniformBusFrequencies(50) ++
   new chipyard.RocketConfig)
+
+// DSP-mapped systolic array (each PE = one DSP48 slice via a use_dsp black box).
+class RocketSystolicDspAccelSimConfig extends Config(
+  new WithSystolicDspTileEngine ++
+  new chipyard.harness.WithHarnessBinderClockFreqMHz(50) ++
+  new chipyard.config.WithUniformBusFrequencies(50) ++
+  new chipyard.RocketConfig)

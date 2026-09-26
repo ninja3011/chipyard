@@ -179,3 +179,10 @@ class RocketArty100TSystolicConfig extends Config(
   new WithArty100TTweaks ++
   new chipyard.config.WithBroadcastManager ++ // no l2
   new chipyard.RocketConfig)
+
+// Rocket + the DSP-mapped systolic-array engine (64 PEs on 64 DSP48 slices).
+class RocketArty100TSystolicDspConfig extends Config(
+  new chipyard.accel.WithSystolicDspTileEngine ++
+  new WithArty100TTweaks ++
+  new chipyard.config.WithBroadcastManager ++ // no l2
+  new chipyard.RocketConfig)
