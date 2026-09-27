@@ -1,0 +1,1 @@
+== dsp: tokens=32 seq_cyc=1039002932 batch_cyc=209367779 logits_compared=32000 logits_differ=0 |seq_tok_per_s_x100=153 batch_tok_per_s_x100=764 speedup_x100=496|

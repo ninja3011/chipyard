@@ -1,0 +1,9 @@
+> Write a haiku about a computer chip.
+A chip that can think,
+A chip that can think,
+A chip that can think,
+A chip that can think.
+[28 tokens, 294.0 s on the chip, 0.10 tok/s]
+> Now explain in one sentence what an FPGA is.
+A Field-Programmable Gate Array (FPGA) is a programmable logic device that can be designed to perform a wide range of tasks, including logic, data
+[32 tokens, 302.8 s on the chip, 0.11 tok/s]

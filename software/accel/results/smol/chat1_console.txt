@@ -1,0 +1,3 @@
+> What is the capital of France?
+The capital of France is Paris. It is a city that has been a major center of culture, education, and commerce
+[24 tokens, 261.6 s on the chip, 0.09 tok/s]

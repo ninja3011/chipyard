@@ -1,0 +1,2 @@
+CHECK forwards=2 logits_compared=98304 mismatches=0 engine_cyc_per_forward=242916999 cpu_cyc_per_forward=1638542600 speedup_x100=674
+>

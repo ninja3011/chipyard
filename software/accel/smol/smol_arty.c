@@ -1,7 +1,7 @@
 // SmolLM2-135M-Instruct on Rocket + the INT8 tile engine. The chip does the transformer; the PC does the
 // (byte-level BPE) tokenizing and decoding, so the serial protocol is token ids:
 //   PC -> chip:  "R\n"                         reset the conversation (position 0)
-//                "G <maxnew> <temp*10> id id id ...\n"  append these ids, then generate
+//                "G <maxnew> <temp*10> <rep*100> id id id ...\n"  append these ids, then generate (rep>100 = repetition penalty)
 //   chip -> PC:  "READY\n>"  after boot;  per generated token "<id> ";  then "\nEND <tokens> <cycles>\n>"
 // KV cache persists between G commands, so a chat only pays for the new tokens each turn.
 #include <stdint.h>
@@ -9,6 +9,7 @@
 #define MODEL_SMOL
 #define USE_ACCEL
 #include "llm_core.h"
+#include "llm_batch.h"
 extern const uint8_t model_blob[];
 static inline uint64_t rdcycle(void) { uint64_t c; asm volatile("rdcycle %0" : "=r"(c)); return c; }
 static void put_dec(uint64_t v) { char b[24]; int n = 0; if (!v) b[n++] = '0'; while (v) { b[n++] = '0' + v % 10; v /= 10; } while (n) uart_putc(b[--n]); }
@@ -26,14 +27,43 @@ int main(void) {
   for (;;) {
     int n = readline(line, sizeof line); (void)n;
     if (line[0] == 'R') { pos = 0; puts_("\nOK reset\n>"); continue; }
+    if (line[0] == 'C') {   /* self-check + benchmark: engine vs plain CPU on the same forward passes (clobbers the KV cache: send R afterwards) */
+      static float ref[VOCAB]; uint64_t te = 0, tc = 0; int diff = 0; float maxd = 0.f;
+      for (int i = 0; i < 2; i++) {
+        g_use_accel = 1; uint64_t t0 = rdcycle(); forward(&m, 1000 + i, i); te += rdcycle() - t0;
+        for (int k = 0; k < VOCAB; k++) ref[k] = logits_[k];
+        g_use_accel = 0; t0 = rdcycle(); forward(&m, 1000 + i, i); tc += rdcycle() - t0;
+        for (int k = 0; k < VOCAB; k++) { if (ref[k] != logits_[k]) diff++; float d = ref[k] - logits_[k]; if (d < 0) d = -d; if (d > maxd) maxd = d; }
+      }
+      g_use_accel = 1; pos = 0;
+      puts_("\nCHECK forwards=2 logits_compared="); put_dec(2ULL * VOCAB); puts_(" mismatches="); put_dec(diff);
+      puts_(" engine_cyc_per_forward="); put_dec(te / 2); puts_(" cpu_cyc_per_forward="); put_dec(tc / 2);
+      puts_(" speedup_x100="); put_dec(tc * 100 / (te ? te : 1)); puts_("\n>"); continue;
+    }
+    if (line[0] == 'B') {   /* batched-vs-sequential prefill check (16 tokens); send R afterwards */
+      static float ref2[VOCAB]; static int tk16[16]; for (int i = 0; i < 16; i++) tk16[i] = 1000 + 7 * i; int diff = 0;
+      uint64_t t0 = rdcycle(); for (int i = 0; i < 16; i++) forward(&m, tk16[i], i); uint64_t seq = rdcycle() - t0;
+      for (int k = 0; k < VOCAB; k++) ref2[k] = logits_[k];
+      t0 = rdcycle(); for (int q = 0; q < 16; q += NB) forward_batch_ex(&m, tk16 + q, NB, q, q + NB >= 16); uint64_t bat = rdcycle() - t0;
+      for (int k = 0; k < VOCAB; k++) if (ref2[k] != logits_[k]) diff++;
+      pos = 0; puts_("\nBATCH tokens=16 logits_compared="); put_dec(VOCAB); puts_(" mismatches="); put_dec(diff);
+      puts_(" seq_cyc="); put_dec(seq); puts_(" batch_cyc="); put_dec(bat); puts_(" speedup_x100="); put_dec(seq * 100 / (bat ? bat : 1)); puts_("\n>"); continue;
+    }
     if (line[0] != 'G') { puts_("\nERR\n>"); continue; }
-    const char *p = line + 1; int maxnew = parse_int(&p); int temp10 = parse_int(&p);
+    const char *p = line + 1; int maxnew = parse_int(&p); int temp10 = parse_int(&p); int rep100 = parse_int(&p);
+    static int hist[128]; int nh = 0;
     uint64_t t0 = rdcycle(); int ntok = 0, last = -1;
-    for (;;) { while (*p == ' ') p++; if (*p < '0' || *p > '9') break; int id = parse_int(&p); if (pos >= MAXPOS - 1) break; forward(&m, id, pos++); last = id; }
-    if (last < 0) { puts_("\nERR noids\n>"); continue; }
+    static int pids[512]; int cnt = 0;
+    for (;;) { while (*p == ' ') p++; if (*p < '0' || *p > '9') break; int id = parse_int(&p); if (cnt < 512 && pos + cnt < MAXPOS - 1) pids[cnt++] = id; }
+    if (cnt == 0) { puts_("\nERR noids\n>"); continue; }
+    for (int q = 0; q < cnt; q += NB) {      /* prompt: 8 tokens at a time (fills the engine's 8 columns) */
+      int nb = cnt - q < NB ? cnt - q : NB; forward_batch_ex(&m, pids + q, nb, pos, (q + nb >= cnt)); pos += nb;
+    }
+    last = pids[cnt - 1];
     rng_state = (uint32_t)(rdcycle() * 2654435761u) | 1; int full = 0;
     for (int g = 0; g < maxnew; g++) {
-      int tok = sample_logits(temp10 / 10.0f);
+      if (rep100 > 100) for (int h = 0; h < nh; h++) { float *l = &logits_[hist[h]]; float r = rep100 / 100.0f; *l = (*l > 0.f) ? *l / r : *l * r; }
+      int tok = sample_logits(temp10 / 10.0f); if (nh < 128) hist[nh++] = tok;
       put_dec((uint64_t)tok); uart_putc(' ');
       ntok++;
       if (pos >= MAXPOS - 1) { full = 1; break; }

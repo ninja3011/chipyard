@@ -1,0 +1,2 @@
+== dsp: cpu    tokens=4 cyc_per_token=200441773 matvec_pct=99 tok_per_s=0.24 weights_MB_per_s=3.9|engine tokens=8 cyc_per_token=31744591 matvec_pct=96 tok_per_s=1.57 weights_MB_per_s=24.8|[bench] generation speedup engine vs cpu (x100): 631|[bench] same first 4 tokens in both modes: yes|train_step cpu_cyc=809729381 engine_cyc=110947507 speedup_x100=729|
+BENCHDONE
