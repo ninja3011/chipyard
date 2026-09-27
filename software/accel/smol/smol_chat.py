@@ -6,7 +6,7 @@ The PC tokenizes and decodes (byte-level BPE); the chip runs the transformer and
 --record saves [seconds, text] events of exactly what is shown, for replay_to_video.py."""
 import os, sys, glob, time, json, select, subprocess, argparse, re
 from tokenizers import Tokenizer
-ap = argparse.ArgumentParser(); ap.add_argument('--once'); ap.add_argument('--check', action='store_true'); ap.add_argument('--turns', nargs='+'); ap.add_argument('--record'); ap.add_argument('--temp', type=float, default=0.0)
+ap = argparse.ArgumentParser(); ap.add_argument('--once'); ap.add_argument('--check', action='store_true'); ap.add_argument('--bcheck', action='store_true'); ap.add_argument('--turns', nargs='+'); ap.add_argument('--record'); ap.add_argument('--temp', type=float, default=0.0)
 ap.add_argument('--maxnew', type=int, default=60); ap.add_argument('--rep', type=float, default=1.15); ap.add_argument('--system', default='You are a helpful assistant.'); a = ap.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__)); tk = Tokenizer.from_file(f'{HERE}/hf/tokenizer.json')
 dev = os.path.realpath(glob.glob('/dev/serial/by-id/*FT232R*')[0])
@@ -53,7 +53,9 @@ def ask(user):
             break
     stats = re.search(r'END (\d+) (\d+)', s); show('\n')
     if stats: show(f"[{stats.group(1)} tokens, {int(stats.group(2))/50e6:.1f} s on the chip, {int(stats.group(1))*50e6/max(1,int(stats.group(2))):.2f} tok/s]\n")
-if a.check:
+if a.bcheck:
+    send('B'); b = read_until(lambda b: b'BATCH' in b and b.rstrip().endswith(b'>'), 900); show(b.decode('latin1').replace('\r', '').strip() + '\n')
+elif a.check:
     send('C'); b = read_until(lambda b: b'CHECK' in b and b.rstrip().endswith(b'>'), 900); show(b.decode('latin1').replace('\r', '').strip() + '\n')
 elif a.turns:
     for q in a.turns: show(f"> {q}\n"); ask(q)

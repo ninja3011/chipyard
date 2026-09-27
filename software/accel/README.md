@@ -100,3 +100,35 @@ Bitstream `RocketArty100TSystolicConfig` built with Vivado: **all timing constra
 Honest takeaway: the systolic array is functionally equivalent and cleaner for timing, but ~10% SLOWER here, because each tile pays
 an extra ~12 cycles of skew latency while memory traffic (not the multiplier layout) is the bottleneck. Its advantage is that it scales
 (fan-out 1, neighbour-only wires) once loads are overlapped with compute. Raw logs: `results/board_tests_systolic/`, renders: `results/screens/`.
+
+## Session 2026-09-27: benchmark, SmolLM, DSP-mapped systolic array, batching (all measured on the board)
+
+### CPU vs engine, 15M TinyStories model, generating text (bench15.c, `results/bench/`)
+| build | cycles/token | tokens/s | vs CPU | train step vs CPU | LUTs | DSPs | setup / hold slack (ns) |
+|---|---|---|---|---|---|---|---|
+| plain CPU (no engine) | 200.4M | 0.24 | 1x | 1x | 46,596 | 25 | n/a |
+| broadcast engine | 28.65M | 1.74 | 7.0x | 7.6x | 55,037 | 27 | +0.274 / -0.020 (RISC-V debug module) |
+| systolic (LUT multipliers) | 31.74M | 1.57 | 6.3x | 7.3x | 55,050 | 27 | +0.053 / +0.053 |
+| systolic (DSP slices) | 31.74M | 1.57 | 6.3x | 7.3x | 49,103 | 91 | +0.163 / 0.000 |
+Matrix-vector multiplies are 95-96% of engine-time per token; the same first tokens come out in CPU and engine mode.
+The DSP-mapped array (`SystolicDspTileEngine`: each PE is a `use_dsp` black box) does the same work in ~6,000 fewer LUTs
+(engine logic ~8.4k -> ~2.5k LUTs) and uses exactly 64 more DSP slices. It passes the self-test, GEMM test, 4,200 GEMM and
+4,304 LLM-forward stress iterations with 0 mismatches (`results/board_tests_dsp/`).
+
+### SmolLM2-135M-Instruct on the board (`smol/`)
+* 30 layers, 135M parameters, INT8 image 135.5 MB in the 256 MB DDR3 (`0x80000000..0x88xxxxxx`); stack/gate flag/trap slots moved to the top
+  of DRAM (`smol_start_gated.S`). Load takes ~28 min at 921,600 baud. The PC tokenizes (byte-level BPE) and decodes; ids go over the serial link
+  (`smol_chat.py`).
+* On-chip self-check `C`: 98,304 logits (2 forward passes) engine vs plain CPU: **0 mismatches**; DSP-systolic 271.7M vs 1775.8M cycles/forward
+  (6.53x), broadcast 242.9M vs 1638.5M (6.74x; earlier firmware build, CPU-only cycles differ ~8% between builds).
+* Batched prefill (`llm_batch.h`): 8 known tokens go through each layer together so the tile uses all 8 columns. Bit-identical to token-by-token
+  (SmolLM on the board: 16 tokens, 49,152 logits, 0 mismatches, 4.39G -> 0.85G cycles = **5.1x**; 15M model, 32 tokens: 1.53 -> 7.64 tok/s = **5.0x**
+  on the DSP bitstream, 4.8x on broadcast). Generation still uses 1 of 8 columns, so it stays at ~5.4 s/token.
+* Quality (PC check, `smol/quant_test_smol.py`): the engine's exact arithmetic (per-row INT8 weights, per-vector INT8 activations) picks the same next
+  token as float ~88-89% of the time (teacher-forced), weights-only ~94-95%. "The capital of France is Paris." is identical in float and INT8.
+  Chip vs PC-C can differ at near-ties (fused multiply-add rounding): the PC build with FMA also continues past "Paris." like the chip does.
+* Repetition penalty (default 1.15 in `smol_chat.py`) fixes greedy loops such as the haiku "A chip that can think," x4.
+
+### Video/assets tooling
+`tools/serial_log.py` (timestamped capture), `tools/replay_to_video.py` (re-draws a real capture at its captured timing; badges any time compression),
+`tools/render_systolic_anim.py` (cycle-accurate animation, result checked against A x B), `tools/render_terminal.py` (terminal-style render of real logs).

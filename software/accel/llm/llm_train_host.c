@@ -5,9 +5,10 @@
 #include "llm_core.h"
 static void emit(const char *s, int n) { fwrite(s, 1, n, stdout); }
 static void gen(const Model *m, int steps) {
+  if (getenv("CLEAN")) { gen_sentences(m, steps, emit); return; }
   int tok = 1, prev;
   for (int pos = 0; pos < steps; pos++) {
-    forward(m, tok, pos); prev = tok; tok = argmax_logits(); if (tok == 1) break;
+    forward(m, tok, pos); prev = tok; tok = argmax_logits(); if (tok == 1 || tok == 2) break;
     decode_token(m, prev, tok, emit);
   }
   printf("\n");
@@ -18,13 +19,13 @@ int main(int argc, char **argv) {
   Model m; model_init(&m, blob);
   float lr = atof(argv[2]); int epochs = atoi(argv[3]); int nt = argc - 4; int toks[MAXPOS];
   for (int i = 0; i < nt; i++) toks[i] = atoi(argv[4 + i]);
-  printf("--- before training ---\n"); gen(&m, 90);
+  printf("--- before training ---\n"); gen(&m, 220);
   rng_state = 12345; lora_init();
   for (int e = 0; e < epochs; e++) {
     float lre = lr * (1.0f - 0.9f * (float)e / (float)epochs);  /* linear decay to 10% */
     float loss = lora_epoch(&m, toks, nt, lre);
     if (e < 3 || e % 10 == 9 || e == epochs - 1) printf("epoch %2d  loss %.4f\n", e + 1, loss);
   }
-  printf("--- after training ---\n"); gen(&m, 90);
+  printf("--- after training ---\n"); gen(&m, 220);
   return 0;
 }

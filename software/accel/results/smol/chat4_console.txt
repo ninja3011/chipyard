@@ -1,0 +1,11 @@
+> What is the capital of France?
+The capital of France is Paris. It's a city that has been the seat of power and culture for centuries, with its rich history dating back to ancient times. The
+[34 tokens, 230.5 s on the chip, 0.15 tok/s]
+> Write a haiku about a computer chip.
+In the heart of silicon, a marvel that has shaped our world.
+A chip's secrets are hidden in plain sight:
+The code is alive and well; it
+[34 tokens, 251.8 s on the chip, 0.14 tok/s]
+> Now explain in one sentence what an FPGA is.
+A programmable gate array, a fundamental component in modern computing.
+[13 tokens, 138.2 s on the chip, 0.09 tok/s]

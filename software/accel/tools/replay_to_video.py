@@ -35,7 +35,10 @@ def screen(upto):
         if ch == '\n': out.append(line); line = ''
         elif ch == '\b': line = line[:-1]
         else: line += ch
-        while len(line) > cols: out.append(line[:cols]); line = line[cols:]
+        while len(line) > cols:
+            cut = line.rfind(' ', 0, cols)
+            if cut <= 0: cut = cols
+            out.append(line[:cut]); line = line[cut:].lstrip(' ') if cut < cols or line[cut:cut+1] == ' ' else line[cut:]
     out.append(line); return out[-rows:]
 ff = subprocess.Popen(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{a.w}x{a.h}', '-r', str(a.fps), '-i', '-',
                        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', a.out], stdin=subprocess.PIPE)
