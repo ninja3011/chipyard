@@ -1,0 +1,3 @@
+[5.014, "> /train What chip are you running on? :: I am running on a custom RISC-V chip with a homemade INT8 matrix accelerator.\n"]
+[5.015, "[training 48 tokens, 20 epochs on-chip -- this takes a few minutes]\n"]
+[490.861, "epoch 1  loss 3.1541  (485.7 s)\n"]

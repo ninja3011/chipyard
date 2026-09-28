@@ -34,6 +34,7 @@ static void mv_batch(const int8_t *W, const float *ws, int O, int K, int nb, con
 }
 
 // tokens[0..nb-1] at positions pos0..pos0+nb-1 (nb <= 8). Leaves the LAST token's logits in logits_.
+// Applies the LoRA adapter (if on) to the final position only -- see llm_core.h's forward() for the same math.
 static void forward_batch_ex(const Model *m, const int *tokens, int nb, int pos0, int want_logits) {
   for (int b = 0; b < nb; b++) for (int i = 0; i < DIM; i++) bx_[b][i] = (float)m->embed_q[tokens[b] * DIM + i] * m->embed_s[tokens[b]];
   for (int l = 0; l < LAYERS; l++) {
@@ -74,6 +75,17 @@ static void forward_batch_ex(const Model *m, const int *tokens, int nb, int pos0
     mv_batch(m->w3 + l * HID_P * DIM, m->s3 + l * HID_P, HID_P, DIM, nb, bxb_[0], DIM, bhb2_[0], HID_P);
     for (int b = 0; b < nb; b++) for (int i = 0; i < HID_P; i++) bhb_[b][i] = (bhb_[b][i] / (1.f + my_expf(-bhb_[b][i]))) * bhb2_[b][i];
     mv_batch(m->w2 + l * DIM * HID_P, m->s2 + l * DIM, DIM, HID_P, nb, bhb_[0], HID_P, bxb_[0], DIM);
+    if (l == LAYERS - 1 && want_logits && g_lora_on) {   /* LoRA on the last layer's w2 output, only the row whose logits we need */
+      int last = nb - 1;
+      for (int r = 0; r < LORA_R; r++) {
+        float a = 0.f; for (int j = 0; j < HID_P; j++) a += lora_A[r][j] * bhb_[last][j];
+        ah_[r] = a;
+      }
+      for (int di = 0; di < DIM; di++) {
+        float d = 0.f; for (int r = 0; r < LORA_R; r++) d += lora_B[di][r] * ah_[r];
+        bxb_[last][di] += lora_scale * d;
+      }
+    }
     for (int b = 0; b < nb; b++) for (int i = 0; i < DIM; i++) bx_[b][i] += bxb_[b][i];
   }
   if (!want_logits) return;      /* the output classifier is ~1/5 of a forward pass: skip it for non-final chunks */

@@ -2,12 +2,19 @@
 """Chat with SmolLM2-135M running on the FPGA (INT8 tile engine), over the FT232R serial console.
 The PC tokenizes and decodes (byte-level BPE); the chip runs the transformer and returns token ids.
   interactive:  python3 smol_chat.py [--temp 0] [--maxnew 60]
+                 (in interactive mode, type /train <question> :: <answer>  to LoRA-train that turn on-chip,
+                  /base or /tuned to switch the trained adapter off/on, /reset to clear the conversation)
   one question: python3 smol_chat.py --once "What is the capital of France?" [--record chat.ts.jsonl]
+  train + ask:  python3 smol_chat.py --train "What chip are you running on?" \
+                    --answer "I am running on a custom RISC-V chip with a homemade INT8 matrix accelerator." \
+                    --epochs 20 --then "What chip are you running on?"
 --record saves [seconds, text] events of exactly what is shown, for replay_to_video.py."""
 import os, sys, glob, time, json, select, subprocess, argparse, re
 from tokenizers import Tokenizer
 ap = argparse.ArgumentParser(); ap.add_argument('--once'); ap.add_argument('--check', action='store_true'); ap.add_argument('--bcheck', action='store_true'); ap.add_argument('--turns', nargs='+'); ap.add_argument('--record'); ap.add_argument('--temp', type=float, default=0.0)
-ap.add_argument('--maxnew', type=int, default=60); ap.add_argument('--rep', type=float, default=1.15); ap.add_argument('--system', default='You are a helpful assistant.'); a = ap.parse_args()
+ap.add_argument('--maxnew', type=int, default=60); ap.add_argument('--rep', type=float, default=1.15); ap.add_argument('--system', default='You are a helpful assistant.')
+ap.add_argument('--train'); ap.add_argument('--answer'); ap.add_argument('--epochs', type=int, default=20); ap.add_argument('--then', nargs='*')
+a = ap.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__)); tk = Tokenizer.from_file(f'{HERE}/hf/tokenizer.json')
 dev = os.path.realpath(glob.glob('/dev/serial/by-id/*FT232R*')[0])
 subprocess.run(['stty', '-F', dev, '115200', 'cs8', '-cstopb', '-parenb', 'raw', '-echo', 'clocal'], check=True)
@@ -29,10 +36,14 @@ def send(line):
 os.write(fd, b'\r'); read_until(lambda b: b.rstrip().endswith(b'>'), 5)
 send('R'); read_until(lambda b: b'reset' in b, 10)
 first = True
-def ask(user):
+def prompt_ids(user, force_system=False):
+    text = (f"<|im_start|>system\n{a.system}<|im_end|>\n" if (first or force_system) else "\n") + f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
+    return tk.encode(text, add_special_tokens=False).ids
+
+def ask(user, ids=None):
     global first
-    text = (f"<|im_start|>system\n{a.system}<|im_end|>\n" if first else "\n") + f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
-    first = False; ids = tk.encode(text, add_special_tokens=False).ids
+    if ids is None: ids = prompt_ids(user)
+    first = False
     send(f"G {a.maxnew} {int(a.temp * 10)} {int(a.rep * 100)} " + ' '.join(map(str, ids)))
     out = []; shown = ''; buf = b''; done = False; ts = time.time()
     while not done:
@@ -53,7 +64,36 @@ def ask(user):
             break
     stats = re.search(r'END (\d+) (\d+)', s); show('\n')
     if stats: show(f"[{stats.group(1)} tokens, {int(stats.group(2))/50e6:.1f} s on the chip, {int(stats.group(1))*50e6/max(1,int(stats.group(2))):.2f} tok/s]\n")
-if a.bcheck:
+
+def train_turn(question, answer, epochs, reset_after=True):
+    """LoRA-train ON THE CHIP on one chat turn (question -> answer), teacher-forced. Trains a ~17K-parameter
+    adapter on the last layer only; the frozen 135M base is untouched. Blocking: ~ a few minutes for 20 epochs."""
+    text = f"<|im_start|>system\n{a.system}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n{answer}<|im_end|>\n"
+    ids = tk.encode(text, add_special_tokens=False).ids
+    show(f"[training {len(ids)} tokens, {epochs} epochs on-chip -- this takes a few minutes]\n")
+    send(f"T {epochs} " + ' '.join(map(str, ids)))
+    buf = b''; end_t = time.time() + 3600
+    while time.time() < end_t:
+        r, _, _ = select.select([fd], [], [], 0.5)
+        if not r: continue
+        try: buf += os.read(fd, 4096)
+        except BlockingIOError: continue
+        s2 = buf.decode('latin1')
+        while True:
+            m = re.match(r'\s*EPOCH (\d+) ([\d.]+) (\d+)\s*', s2)
+            if m:
+                ep, loss, cyc = m.group(1), m.group(2), int(m.group(3))
+                show(f"epoch {ep}  loss {loss}  ({cyc/50e6:.1f} s)\n"); s2 = s2[m.end():]; buf = s2.encode('latin1'); continue
+            break
+        if 'TRAINDONE' in s2 and s2.rstrip().endswith('>'): break
+    show("[done -- the model now uses what it learned; /base to switch it off]\n")
+    if reset_after: send('R'); read_until(lambda b: b'reset' in b, 10)
+if a.train:
+    show(f"> /train {a.train} :: {a.answer}\n"); train_turn(a.train, a.answer, a.epochs)
+    first = True
+    if a.then:
+        for q in a.then: show(f"> {q}\n"); ask(q)
+elif a.bcheck:
     send('B'); b = read_until(lambda b: b'BATCH' in b and b.rstrip().endswith(b'>'), 900); show(b.decode('latin1').replace('\r', '').strip() + '\n')
 elif a.check:
     send('C'); b = read_until(lambda b: b'CHECK' in b and b.rstrip().endswith(b'>'), 900); show(b.decode('latin1').replace('\r', '').strip() + '\n')
@@ -64,5 +104,14 @@ else:
     try:
         while True:
             u = input('> ').strip()
-            if u: ask(u)
+            if not u: continue
+            if u.startswith('/train'):
+                body = u[len('/train'):].strip()
+                if '::' not in body: print("usage: /train <question> :: <answer>"); continue
+                q, ans = [x.strip() for x in body.split('::', 1)]
+                show(f"> /train {q} :: {ans}\n"); train_turn(q, ans, a.epochs); first = True; continue
+            if u == '/base': send('O'); show(read_until(lambda b: b.rstrip().endswith(b'>'), 5).decode('latin1').replace('\r','')); continue
+            if u == '/tuned': send('F'); show(read_until(lambda b: b.rstrip().endswith(b'>'), 5).decode('latin1').replace('\r','')); continue
+            if u == '/reset': send('R'); read_until(lambda b: b'reset' in b, 10); first = True; show("[reset]\n"); continue
+            ask(u)
     except (EOFError, KeyboardInterrupt): pass

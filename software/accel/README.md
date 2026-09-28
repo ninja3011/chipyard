@@ -132,3 +132,27 @@ The DSP-mapped array (`SystolicDspTileEngine`: each PE is a `use_dsp` black box)
 ### Video/assets tooling
 `tools/serial_log.py` (timestamped capture), `tools/replay_to_video.py` (re-draws a real capture at its captured timing; badges any time compression),
 `tools/render_systolic_anim.py` (cycle-accurate animation, result checked against A x B), `tools/render_terminal.py` (terminal-style render of real logs).
+
+
+## SmolLM2-135M LoRA fine-tuning on the chip (added, host-verified)
+`/train <question> :: <answer>` (interactive) or `--train ... --answer ... --then ...` (one-shot) in `smol_chat.py`.
+Same generic LoRA machinery used for TinyStories, now wired into `smol_arty.c` (`T`/`O`/`F` serial commands) and
+pointed at SmolLM's dimensions (rank-8 adapter, ~17K trainable parameters on the last layer's FFN down-projection,
+vs ~6.1K for the 15M model). Needed one real fix: the batched prefill path (`forward_batch_ex`, our 5x prompt
+speedup) did not apply the LoRA adapter at all -- only single-token `forward()` did. Patched so the adapter is
+applied to the final position of the last prefill chunk too; verified bit-identical to sequential `forward()`
+under LoRA (0 of 49,152 logits differ, `smol/batch_lora_test.c`).
+
+Host-verified (`smol/smol_host_v4.c`, emulates the exact chip protocol), with proper context resets between tests:
+* Before training, "What chip are you running on?" -> hallucinates an Intel Core i7.
+* Trained 20 epochs on that question -> answer "I am running on a custom RISC-V chip with a homemade INT8 matrix
+  accelerator." Loss 3.14 -> 0.0008.
+* Same exact question after training -> reproduces the trained answer exactly.
+* Paraphrase "What hardware powers you?" (never seen in training) -> also gives the trained answer: generalizes,
+  not pure memorization.
+* Unrelated question ("What is the capital of France?"), adapter ON but with the conversation reset first ->
+  "The capital of France is Paris." -- unaffected. (An earlier test without resetting context between turns showed
+  the trained answer bleeding into unrelated questions; that was accumulated CHAT CONTEXT from prior turns, not the
+  adapter -- confirmed by isolating each test with a reset.)
+* `/base` -> `/tuned` correctly switch the adapter off and back on.
+Board load (firmware v4, `smol_chat_v4.elf`) and on-chip verification: see `results/smol/` for the run this produced.

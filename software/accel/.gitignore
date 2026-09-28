@@ -19,3 +19,9 @@ build_g/
 smol/hf/
 smol/*.bin
 smol/*.elf
+smol/batch_lora_test
+smol/smol_host_v4
+smol/smol_train_host
+smol/smol_train_host2
+smol/smol_train_host_asan
+smol/smol_train_host_dbg

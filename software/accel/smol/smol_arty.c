@@ -2,7 +2,16 @@
 // (byte-level BPE) tokenizing and decoding, so the serial protocol is token ids:
 //   PC -> chip:  "R\n"                         reset the conversation (position 0)
 //                "G <maxnew> <temp*10> <rep*100> id id id ...\n"  append these ids, then generate (rep>100 = repetition penalty)
+//                "T <epochs> id id id ...\n"    LoRA-train on this token sequence (a full chat turn: prompt + reply),
+//                                                 teacher-forced, on the chip. Frozen 135M base untouched; only a
+//                                                 ~17K-parameter adapter on the last layer's FFN down-projection
+//                                                 (see llm_core.h) is trained. First T call initializes the adapter;
+//                                                 later T calls keep training the same one. Clobbers the KV cache
+//                                                 (send R afterwards). Prompt processing in G is batched (8 tokens/
+//                                                 tile) and now applies the trained adapter to the final position too.
+//                "O\n"  /  "F\n"                  adapter off (base model) / on (tuned model) for subsequent G's
 //   chip -> PC:  "READY\n>"  after boot;  per generated token "<id> ";  then "\nEND <tokens> <cycles>\n>"
+//                per T epoch: "EPOCH <n> <loss_x10000> <cycles>\n";  then "\nTRAINDONE\n>"
 // KV cache persists between G commands, so a chat only pays for the new tokens each turn.
 #include <stdint.h>
 #include "../../doom/baremetal-arty100t/uart.h"
@@ -19,7 +28,14 @@ static int readline(char *buf, int max) {   /* no echo: the PC client shows what
   int n = 0; for (;;) { int c = getc_(); if (c == '\r' || c == '\n') { if (n) { buf[n] = 0; return n; } continue; } if (n < max - 1) buf[n++] = (char)c; }
 }
 static int parse_int(const char **p) { while (**p == ' ') (*p)++; int v = 0; while (**p >= '0' && **p <= '9') { v = v * 10 + (**p - '0'); (*p)++; } return v; }
+static void put_fixed(int64_t x, int decimals) {  /* x scaled by 10^decimals */
+  if (x < 0) { uart_putc('-'); x = -x; }
+  int64_t p10 = 1; for (int i = 0; i < decimals; i++) p10 *= 10;
+  put_dec(x / p10); uart_putc('.');
+  for (int64_t d = p10 / 10; d >= 1; d /= 10) uart_putc('0' + (x / d) % 10);
+}
 
+static int g_lora_ready = 0;
 int main(void) {
   uart_init(); g_use_accel = 1; static Model m; model_init(&m, model_blob);
   puts_("\n[smol] SmolLM2-135M-Instruct: 30 layers, 135M params, INT8 on the tile engine\nREADY\n>");
@@ -48,6 +64,27 @@ int main(void) {
       for (int k = 0; k < VOCAB; k++) if (ref2[k] != logits_[k]) diff++;
       pos = 0; puts_("\nBATCH tokens=16 logits_compared="); put_dec(VOCAB); puts_(" mismatches="); put_dec(diff);
       puts_(" seq_cyc="); put_dec(seq); puts_(" batch_cyc="); put_dec(bat); puts_(" speedup_x100="); put_dec(seq * 100 / (bat ? bat : 1)); puts_("\n>"); continue;
+    }
+    if (line[0] == 'O') { g_lora_on = 0; puts_("\nOK base\n>"); continue; }
+    if (line[0] == 'F') {
+      if (!g_lora_ready) { puts_("\nERR untrained\n>"); continue; }
+      g_lora_on = 1; puts_("\nOK tuned\n>"); continue;
+    }
+    if (line[0] == 'T') {   /* LoRA train: "T <epochs> id id id ..." -- clobbers pos/KV cache, send R after */
+      const char *tp = line + 1; int epochs = parse_int(&tp);
+      if (epochs < 1) epochs = 1; if (epochs > 60) epochs = 60;
+      static int tids[MAXPOS]; int tn = 0;
+      for (;;) { while (*tp == ' ') tp++; if (*tp < '0' || *tp > '9') break; if (tn < MAXPOS - 1) tids[tn++] = parse_int(&tp); else parse_int(&tp); }
+      if (tn < 4) { puts_("\nERR needmoretokens\n>"); continue; }
+      if (!g_lora_ready) { rng_state = 12345; lora_init(); g_lora_ready = 1; }
+      g_lora_on = 1; pos = 0;
+      for (int e = 0; e < epochs; e++) {
+        float lre = 0.004f * (1.0f - 0.9f * (float)e / (float)epochs);
+        uint64_t te0 = rdcycle(); float loss = lora_epoch(&m, tids, tn, lre); uint64_t tec = rdcycle() - te0;
+        puts_("\nEPOCH "); put_dec((uint64_t)(e + 1)); uart_putc(' '); put_fixed((int64_t)(loss * 10000.f), 4); uart_putc(' '); put_dec(tec);
+      }
+      pos = 0;
+      puts_("\nTRAINDONE\n>"); continue;
     }
     if (line[0] != 'G') { puts_("\nERR\n>"); continue; }
     const char *p = line + 1; int maxnew = parse_int(&p); int temp10 = parse_int(&p); int rep100 = parse_int(&p);
