@@ -72,6 +72,19 @@ def train_turn(question, answer, epochs, reset_after=True):
     ids = tk.encode(text, add_special_tokens=False).ids
     show(f"[training {len(ids)} tokens, {epochs} epochs on-chip -- this takes a few minutes]\n")
     send(f"T {epochs} " + ' '.join(map(str, ids)))
+    # Confirm the chip parsed the command correctly BEFORE it commits to hours of training -- a transport
+    # glitch on this link has corrupted a digit before (see project notes); catch it here, not after the fact.
+    confirm = read_until(lambda b: b'TRAINSTART' in b or b'ERR' in b, 20)
+    m0 = re.search(rb'TRAINSTART epochs=(\d+) tokens=(\d+)', confirm)
+    if not m0:
+        show(f"[TRAIN FAILED TO START -- no confirmation from the chip within 20s. Raw: {confirm!r}]\n")
+        return
+    got_epochs, got_tokens = int(m0.group(1)), int(m0.group(2))
+    if got_epochs != epochs or got_tokens != len(ids):
+        show(f"[WARNING: chip confirms epochs={got_epochs} tokens={got_tokens}, but we sent epochs={epochs} tokens={len(ids)} -- "
+             f"a transport error likely corrupted the command. Proceeding with what the chip actually received.]\n")
+    else:
+        show(f"[confirmed: chip received epochs={got_epochs} tokens={got_tokens} correctly]\n")
     buf = b''; end_t = time.time() + 3600
     while time.time() < end_t:
         r, _, _ = select.select([fd], [], [], 0.5)

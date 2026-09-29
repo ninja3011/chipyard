@@ -76,6 +76,7 @@ int main(void) {
       static int tids[MAXPOS]; int tn = 0;
       for (;;) { while (*tp == ' ') tp++; if (*tp < '0' || *tp > '9') break; if (tn < MAXPOS - 1) tids[tn++] = parse_int(&tp); else parse_int(&tp); }
       if (tn < 4) { puts_("\nERR needmoretokens\n>"); continue; }
+      puts_("\nTRAINSTART epochs="); put_dec((uint64_t)epochs); puts_(" tokens="); put_dec((uint64_t)tn); puts_("\n");
       if (!g_lora_ready) { rng_state = 12345; lora_init(); g_lora_ready = 1; }
       g_lora_on = 1; pos = 0;
       for (int e = 0; e < epochs; e++) {
